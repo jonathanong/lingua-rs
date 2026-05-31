@@ -1,0 +1,56 @@
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - rust
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: npm
+    directory: /package
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:15"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - npm
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: America/Los_Angeles
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - dependencies
+      - ci
+    groups:
+      github-actions:
+        patterns:
+          - "*"

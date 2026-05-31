@@ -1,0 +1,12 @@
+[package]
+name = "lingua-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Language detection via lingua — detects 75 languages"
+repository = "https://github.com/jonathanong/lingua-rs"
+keywords = ["language", "detection", "nlp", "lingua"]
+categories = ["text-processing"]
+
+[dependencies]
+lingua = "1.8.0"

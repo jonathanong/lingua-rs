@@ -1,0 +1,6 @@
+target/
+node_modules/
+*.node
+coverage/
+*.profraw
+package/*.tgz

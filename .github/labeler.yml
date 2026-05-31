@@ -1,0 +1,48 @@
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.toml"
+          - "Cargo.lock"
+          - "package/package.json"
+          - "package/pnpm-lock.yaml"
+          - ".github/dependabot.yml"
+
+npm:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package/package.json"
+          - "package/pnpm-lock.yaml"
+          - "package/src/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "LICENSE"
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "Cargo.toml"
+          - "Cargo.lock"
+          - "crate/**/*.rs"
+          - "package/src/**/*.rs"
+          - "crate/tests/**"
+
+tests:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "crate/tests/**"
+          - "package/__tests__/**"
+
+configuration:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "*.config.*"
+          - "**/*.config.*"
+          - "codecov.yml"

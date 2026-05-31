@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-slim
+    timeout-minutes: 420
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install dependencies
+        working-directory: package
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build native module (debug)
+        working-directory: package
+        run: pnpm build:debug
+
+      - name: TypeScript type check
+        working-directory: package
+        run: pnpm exec tsc --noEmit
+
+      - name: Run Node tests
+        working-directory: package
+        run: pnpm test
+
+      - name: Run Rust tests
+        run: cargo test -p lingua-rs
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Enforce Rust coverage
+        run: |
+          mkdir -p target/llvm-cov
+          cargo llvm-cov -p lingua-rs \
+            --fail-under-lines 90 \
+            --fail-under-regions 85 \
+            --show-missing-lines \
+            --lcov \
+            --output-path target/llvm-cov/lcov.info
+
+      - name: Upload Rust coverage to Codecov
+        if: ${{ env.CODECOV_TOKEN != '' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ env.CODECOV_TOKEN }}
+          files: target/llvm-cov/lcov.info
+          flags: rust
+          fail_ci_if_error: true

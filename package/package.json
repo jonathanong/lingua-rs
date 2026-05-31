@@ -1,0 +1,52 @@
+{
+  "name": "lingua-rs",
+  "version": "0.1.0",
+  "description": "Language detection for Node.js — wraps the Rust lingua crate, detects 75 languages",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "packageManager": "pnpm@11.0.3",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jonathanong/lingua-rs.git"
+  },
+  "keywords": [
+    "language",
+    "detection",
+    "nlp",
+    "lingua",
+    "napi"
+  ],
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "*.node"
+  ],
+  "napi": {
+    "binaryName": "lingua_rs",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "aarch64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "prepublishOnly": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^3",
+    "@types/node": "^25.8.0",
+    "@vitest/coverage-v8": "^4",
+    "typescript": "^6",
+    "vitest": "^4"
+  }
+}

@@ -1,0 +1,28 @@
+coverage:
+  status:
+    project:
+      default: off
+      rust:
+        target: 90%
+        threshold: 1%
+        require_base: false
+        flags:
+          - rust
+        if_not_found: failure
+    patch:
+      default: off
+      rust:
+        target: 85%
+        threshold: 2%
+        flags:
+          - rust
+        if_not_found: failure
+
+flag_management:
+  default_rules:
+    carryforward: false
+  individual_flags:
+    - name: rust
+      paths:
+        - crate/src/
+        - crate/tests/
