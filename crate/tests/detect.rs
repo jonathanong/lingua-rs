@@ -177,7 +177,7 @@ fn low_accuracy_mode_detects_french() {
 
 #[test]
 fn detect_many_texts() {
-    let texts = vec![
+    let texts = [
         "The quick brown fox jumps over the lazy dog.",
         "Bonjour le monde. La France est un beau pays.",
         "Hola mundo. España es un país hermoso.",
