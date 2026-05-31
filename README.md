@@ -2,29 +2,17 @@
 
 [![CI](https://github.com/jonathanong/lingua-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/jonathanong/lingua-rs/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/jonathanong/lingua-rs/graph/badge.svg)](https://codecov.io/gh/jonathanong/lingua-rs)
-[![Crates.io](https://img.shields.io/crates/v/lingua-rs.svg)](https://crates.io/crates/lingua-rs)
 [![npm](https://img.shields.io/npm/v/lingua-rs.svg)](https://www.npmjs.com/package/lingua-rs)
 
-Language detection for Node.js and Rust — wraps the [`lingua`](https://crates.io/crates/lingua) crate via N-API, detecting 75 languages with high accuracy using pre-trained statistical models.
+Language detection for Node.js — wraps the [`lingua`](https://crates.io/crates/lingua) crate via N-API, detecting 75 languages with high accuracy using pre-trained statistical models.
 
 ## Installation
-
-### Node.js
 
 ```sh
 npm install lingua-rs
 ```
 
-### Rust
-
-```toml
-[dependencies]
-lingua-rs = "0.1"
-```
-
 ## Usage
-
-### Node.js
 
 ```js
 import { detectLanguage, detectLanguageMany } from 'lingua-rs'
@@ -49,18 +37,6 @@ const results = await detectLanguageMany([
   Buffer.from('Bonjour le monde.'),
   Buffer.from('Hola mundo.'),
 ])
-```
-
-### Rust
-
-```rust
-use lingua_rs::{detect, DetectionOptions};
-
-let opts = DetectionOptions::default();
-let result = detect("This is clearly English text.", &opts);
-
-println!("{}", result.languages[0].iso6391);   // "en"
-println!("{}", result.languages[0].confidence); // 0.9...
 ```
 
 ## API
@@ -99,8 +75,8 @@ Detects languages for multiple inputs in a single thread pool task. More efficie
 ## Repository layout
 
 ```
-crate/      Pure-Rust library crate (publishable to crates.io as lingua-rs)
-package/    N-API cdylib + Node.js package (publishable to npm as lingua-rs)
+crate/      Pure-Rust library (the language detection logic, no napi deps)
+package/    N-API cdylib + Node.js package (published to npm as lingua-rs)
 ```
 
 ## License
