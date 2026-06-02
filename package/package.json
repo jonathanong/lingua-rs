@@ -39,8 +39,7 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "vitest run",
-    "coverage": "vitest run --coverage",
-    "prepublishOnly": "napi prepublish -t npm"
+    "coverage": "vitest run --coverage"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3",
