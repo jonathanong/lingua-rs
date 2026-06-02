@@ -1,6 +1,6 @@
 {
   "name": "lingua-rs",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Language detection for Node.js — wraps the Rust lingua crate, detects 75 languages",
   "main": "index.js",
   "types": "index.d.ts",
