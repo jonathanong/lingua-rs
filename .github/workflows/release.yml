@@ -151,6 +151,11 @@ jobs:
       - name: Push release commit and tag
         run: git push origin HEAD:main --follow-tags
 
+      - name: Create GitHub release
+        run: gh release create "v${{ steps.bump.outputs.version }}" --title "v${{ steps.bump.outputs.version }}" --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+
   build:
     name: Build ${{ matrix.target }}
     needs: prepare
@@ -207,12 +212,12 @@ jobs:
         shell: bash
         run: pnpm exec napi build --platform --release --target ${{ matrix.target }}
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: bindings-${{ matrix.target }}
-          path: package/*.node
-          if-no-files-found: error
+      - name: Upload binary to GitHub release
+        working-directory: package
+        shell: bash
+        run: gh release upload "v${{ needs.prepare.outputs.version }}" *.node --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   publish:
     name: Publish
@@ -241,25 +246,6 @@ jobs:
       - name: Install dependencies
         working-directory: package
         run: pnpm install --frozen-lockfile --ignore-scripts
-
-      - name: Download all native binaries
-        uses: actions/download-artifact@v8
-        with:
-          path: package
-          merge-multiple: true
-
-      - name: Create GitHub release
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="v${{ needs.prepare.outputs.version }}"
-          if gh release view "$tag" >/dev/null 2>&1; then
-            echo "Release $tag already exists; skipping"
-          else
-            gh release create "$tag" --title "$tag" --generate-notes
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Publish npm package
         shell: bash

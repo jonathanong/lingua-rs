@@ -23,7 +23,7 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "*.node"
+    "postinstall.js"
   ],
   "napi": {
     "binaryName": "lingua_rs",
@@ -39,7 +39,8 @@
     "build": "napi build --platform --release",
     "build:debug": "napi build --platform",
     "test": "vitest run",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "postinstall": "node postinstall.js"
   },
   "devDependencies": {
     "@napi-rs/cli": "^3",
