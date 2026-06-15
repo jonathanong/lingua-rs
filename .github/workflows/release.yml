@@ -86,7 +86,7 @@ jobs:
           node-version: 24
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.0.8
         with:
           version: 11
 
@@ -199,7 +199,7 @@ jobs:
           node-version: 24
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.0.8
         with:
           version: 11
 
@@ -239,7 +239,7 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v6
+        uses: pnpm/action-setup@v6.0.8
         with:
           version: 11
 
