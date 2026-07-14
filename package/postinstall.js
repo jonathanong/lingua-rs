@@ -11,6 +11,7 @@ const path = require('node:path')
 const { version } = require('./package.json')
 
 const MAX_REDIRECTS = 5
+const ignoreRedirectDrainError = () => undefined
 
 const BINARY_MAP = {
   'darwin-arm64': 'lingua_rs.darwin-arm64.node',
@@ -23,6 +24,7 @@ const BINARY_MAP = {
 function download(url, dest, cb, redirectCount = 0, get = https.get) {
   get(url, (res) => {
     if (res.statusCode === 301 || res.statusCode === 302) {
+      res.on('error', ignoreRedirectDrainError)
       res.resume()
       const location = res.headers.location
       if (!location) {

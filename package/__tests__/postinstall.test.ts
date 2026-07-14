@@ -70,6 +70,19 @@ describe('postinstall download redirects', () => {
     expect(error?.message).toBe('HTTP 500 fetching https://example.test/binary')
   })
 
+  it('handles errors emitted while a redirect response drains', async () => {
+    const redirect = new FakeResponse(302, 'https://example.test/binary')
+    const failure = new FakeResponse(500)
+    const [get, requestUrls] = redirectingGet([redirect, failure])
+
+    await new Promise<Error | null>((resolve) => {
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+    })
+
+    expect(() => redirect.emit('error', new Error('connection reset'))).not.toThrow()
+    expect(requestUrls).toHaveBeenCalledTimes(2)
+  })
+
   it('allows five redirects and rejects the sixth without another request', async () => {
     const redirects = Array.from(
       { length: MAX_REDIRECTS + 1 },
