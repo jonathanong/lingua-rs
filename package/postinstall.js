@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // Downloads the platform-specific native binary from the GitHub release.
-// If the download fails, installation succeeds but language detection will
-// throw at runtime (detector.mts handles this and lets jobs retry).
+// Installation remains best-effort: an existing binary is preserved until a
+// verified replacement is ready, and npm installation succeeds on failure.
 'use strict'
 
 const https = require('node:https')
+const crypto = require('node:crypto')
 const fs = require('node:fs')
 const path = require('node:path')
 const { pipeline } = require('node:stream')
@@ -12,6 +13,8 @@ const { pipeline } = require('node:stream')
 const { version } = require('./package.json')
 
 const MAX_REDIRECTS = 5
+const MAX_CHECKSUM_BYTES = 1024
+const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
 
 const BINARY_MAP = {
@@ -22,25 +25,99 @@ const BINARY_MAP = {
   'win32-x64': 'lingua_rs.win32-x64-msvc.node',
 }
 
-function download(url, dest, cb, redirectCount = 0, get = https.get) {
+function once(cb) {
+  let finished = false
+  return (err, value) => {
+    if (finished) return
+    finished = true
+    cb(err, value)
+  }
+}
+
+function request(url, cb, { redirectCount = 0, get = https.get } = {}) {
+  const done = once(cb)
   get(url, (res) => {
     if (res.statusCode === 301 || res.statusCode === 302) {
       res.on('error', ignoreRedirectDrainError)
       res.resume()
       const location = res.headers.location && new URL(res.headers.location, url).toString()
       if (!location) {
-        cb(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
+        done(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
         return
       }
       if (redirectCount >= MAX_REDIRECTS) {
-        cb(new Error(`Too many redirects fetching ${location}`))
+        done(new Error(`Too many redirects fetching ${location}`))
         return
       }
-      download(location, dest, cb, redirectCount + 1, get)
+      request(location, done, { redirectCount: redirectCount + 1, get })
       return
     }
     if (res.statusCode !== 200) {
-      cb(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+      res.on('error', ignoreRedirectDrainError)
+      res.resume()
+      done(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+      return
+    }
+    done(null, res)
+  }).on('error', done)
+}
+
+function hashFile(filename, cb) {
+  const done = once(cb)
+  const hash = crypto.createHash('sha256')
+  const file = fs.createReadStream(filename)
+  let checksum
+  file.on('error', (err) => done(err))
+  file.on('data', (chunk) => hash.update(chunk))
+  file.on('end', () => {
+    checksum = hash.digest('hex')
+  })
+  file.on('close', () => {
+    if (checksum) done(null, checksum)
+  })
+}
+
+function parseChecksum(contents, binaryName) {
+  if (typeof contents !== 'string') {
+    throw new TypeError(`Invalid checksum for ${binaryName}`)
+  }
+  const line = contents.trim()
+  const checksum = line.slice(0, 64).toLowerCase()
+  const separator = line.slice(64, 66)
+  const filename = line.slice(66)
+  const checksumIsHex =
+    checksum.length === 64 && [...checksum].every((character) => HEX_DIGITS.includes(character))
+  if (!checksumIsHex || separator !== '  ' || filename !== binaryName) {
+    throw new Error(`Invalid checksum for ${binaryName}`)
+  }
+  return checksum
+}
+
+function fetchText(url, cb, redirectCount = 0, get = https.get) {
+  request(url, (requestError, res) => {
+    if (requestError) {
+      cb(requestError)
+      return
+    }
+
+    let contents = ''
+    const done = once(cb)
+    res.setEncoding('utf8')
+    res.on('data', (chunk) => {
+      contents += chunk
+      if (contents.length > MAX_CHECKSUM_BYTES) {
+        res.destroy(new Error(`Checksum response too large fetching ${url}`))
+      }
+    })
+    res.on('error', (err) => done(err))
+    res.on('end', () => done(null, contents))
+  }, { redirectCount, get })
+}
+
+function download(url, dest, cb, { get = https.get, expectedChecksum } = {}) {
+  request(url, (requestError, res) => {
+    if (requestError) {
+      cb(requestError)
       return
     }
     const tmp = dest + '.tmp'
@@ -51,51 +128,93 @@ function download(url, dest, cb, redirectCount = 0, get = https.get) {
         cb(err)
         return
       }
-      try {
-        fs.renameSync(tmp, dest)
-      } catch (e) {
-        cb(e)
+      const install = () => {
+        try {
+          fs.renameSync(tmp, dest)
+        } catch (e) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(e)
+          return
+        }
+        cb(null)
+      }
+
+      if (!expectedChecksum) {
+        install()
         return
       }
-      cb(null)
+      hashFile(tmp, (hashError, actualChecksum) => {
+        if (hashError || actualChecksum !== expectedChecksum) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(hashError || new Error(`Checksum mismatch downloading ${url}`))
+          return
+        }
+        install()
+      })
     })
-  }).on('error', cb)
+  }, { get })
 }
 
-function install() {
-  const platformKey = `${process.platform}-${process.arch}`
+function callbackPromise(run) {
+  return new Promise((resolve, reject) => {
+    run((error, value) => (error ? reject(error) : resolve(value)))
+  })
+}
+
+async function install({
+  platform = process.platform,
+  arch = process.arch,
+  directory = __dirname,
+  fetchChecksum = fetchText,
+  hashExistingFile = hashFile,
+  downloadFile = (url, dest, checksum, cb) =>
+    download(url, dest, cb, { expectedChecksum: checksum }),
+} = {}) {
+  const platformKey = `${platform}-${arch}`
   const binaryName = BINARY_MAP[platformKey]
 
   if (!binaryName) {
     console.warn(
       `[lingua-rs] unsupported platform ${platformKey} — language detection will fail at runtime`,
     )
-    process.exit(0)
+    return
   }
 
-  const dest = path.join(__dirname, binaryName)
-
-  if (fs.existsSync(dest)) {
-    // Already present — local build or re-install of same version.
-    process.exit(0)
-  }
-
+  const dest = path.join(directory, binaryName)
   const url = `https://github.com/jonathanong/lingua-rs/releases/download/v${version}/${binaryName}`
-  console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
+  const checksumUrl = `${url}.sha256`
 
-  download(url, dest, (err) => {
-    if (err) {
-      try { fs.unlinkSync(dest) } catch {}
-      console.warn(
-        `[lingua-rs] failed to download ${binaryName}.\n` +
-          '  Language detection will fail at runtime until the binary is available.',
-      )
-      process.exit(0)
-    }
-    console.log(`[lingua-rs] installed ${binaryName}`)
-  })
+  let expectedChecksum
+  try {
+    const contents = await callbackPromise((cb) => fetchChecksum(checksumUrl, cb))
+    expectedChecksum = parseChecksum(contents, binaryName)
+  } catch {
+    console.warn(`[lingua-rs] failed to fetch a valid checksum for ${binaryName}`)
+    return
+  }
+
+  let actualChecksum
+  try {
+    actualChecksum = await callbackPromise((cb) => hashExistingFile(dest, cb))
+  } catch {}
+  if (actualChecksum === expectedChecksum) {
+    console.log(`[lingua-rs] ${binaryName} is up to date`)
+    return
+  }
+
+  console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
+  try {
+    await callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb))
+  } catch {
+    console.warn(
+      `[lingua-rs] failed to download ${binaryName}.\n` +
+        '  The existing binary, if any, was left unchanged.',
+    )
+    return
+  }
+  console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
-if (require.main === module) install()
+if (require.main === module) void install()
 
-module.exports = { download, MAX_REDIRECTS }
+module.exports = { download, fetchText, hashFile, install, parseChecksum, MAX_REDIRECTS }
