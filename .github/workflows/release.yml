@@ -212,10 +212,27 @@ jobs:
         shell: bash
         run: pnpm exec napi build --platform --release --target ${{ matrix.target }}
 
+      - name: Generate binary checksum
+        working-directory: package
+        shell: bash
+        run: |
+          node -e "
+            const crypto = require('node:crypto');
+            const fs = require('node:fs');
+            const files = fs.readdirSync('.').filter((name) => name.endsWith('.node'));
+            if (files.length !== 1) throw new Error('Expected exactly one .node artifact, found ' + files.length);
+            const [name] = files;
+            const hash = crypto.createHash('sha256');
+            fs.createReadStream(name)
+              .on('error', (error) => { throw error; })
+              .on('data', (chunk) => hash.update(chunk))
+              .on('end', () => fs.writeFileSync(name + '.sha256', hash.digest('hex') + '  ' + name + '\n'));
+          "
+
       - name: Upload binary to GitHub release
         working-directory: package
         shell: bash
-        run: gh release upload "v${{ needs.prepare.outputs.version }}" ./*.node --clobber
+        run: gh release upload "v${{ needs.prepare.outputs.version }}" ./*.node ./*.node.sha256 --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
