@@ -26,7 +26,7 @@ function download(url, dest, cb, redirectCount = 0, get = https.get) {
     if (res.statusCode === 301 || res.statusCode === 302) {
       res.on('error', ignoreRedirectDrainError)
       res.resume()
-      const location = res.headers.location
+      const location = res.headers.location && new URL(res.headers.location, url).toString()
       if (!location) {
         cb(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
         return
@@ -65,7 +65,7 @@ function download(url, dest, cb, redirectCount = 0, get = https.get) {
       cb(err)
     })
     res.on('error', (err) => {
-      try { fs.unlinkSync(tmp) } catch {}
+        try { fs.unlinkSync(tmp) } catch {}
       cb(err)
     })
   }).on('error', cb)

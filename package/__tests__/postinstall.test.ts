@@ -83,6 +83,21 @@ describe('postinstall download redirects', () => {
     expect(requestUrls).toHaveBeenCalledTimes(2)
   })
 
+  it('resolves a relative redirect location against the current URL', async () => {
+    const redirect = new FakeResponse(302, '/binary')
+    const failure = new FakeResponse(500)
+    const [get, requestUrls] = redirectingGet([redirect, failure])
+
+    await new Promise<Error | null>((resolve) => {
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+    })
+
+    expect(requestUrls.mock.calls).toEqual([
+      ['https://example.test/release'],
+      ['https://example.test/binary'],
+    ])
+  })
+
   it('allows five redirects and rejects the sixth without another request', async () => {
     const redirects = Array.from(
       { length: MAX_REDIRECTS + 1 },
@@ -120,4 +135,5 @@ describe('postinstall download redirects', () => {
       await rm(directory, { recursive: true, force: true })
     }
   })
+
 })
