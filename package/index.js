@@ -78,12 +78,12 @@ function requireNative() {
         const binding = require('lingua-rs-win32-x64-msvc')
         const bindingPackageVersion = require('lingua-rs-win32-x64-msvc/package.json').version
         if (
-          bindingPackageVersion !== '0.1.3' &&
+          bindingPackageVersion !== '0.1.4' &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0'
         ) {
           throw new Error(
-            `Native binding package version mismatch, expected 0.1.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
+            `Native binding package version mismatch, expected 0.1.4 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
           )
         }
         return binding
@@ -104,12 +104,12 @@ function requireNative() {
         const binding = require('lingua-rs-darwin-x64')
         const bindingPackageVersion = require('lingua-rs-darwin-x64/package.json').version
         if (
-          bindingPackageVersion !== '0.1.3' &&
+          bindingPackageVersion !== '0.1.4' &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0'
         ) {
           throw new Error(
-            `Native binding package version mismatch, expected 0.1.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
+            `Native binding package version mismatch, expected 0.1.4 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
           )
         }
         return binding
@@ -126,12 +126,12 @@ function requireNative() {
         const binding = require('lingua-rs-darwin-arm64')
         const bindingPackageVersion = require('lingua-rs-darwin-arm64/package.json').version
         if (
-          bindingPackageVersion !== '0.1.3' &&
+          bindingPackageVersion !== '0.1.4' &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK &&
           process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0'
         ) {
           throw new Error(
-            `Native binding package version mismatch, expected 0.1.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
+            `Native binding package version mismatch, expected 0.1.4 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
           )
         }
         return binding
@@ -155,12 +155,12 @@ function requireNative() {
           const binding = require('lingua-rs-linux-x64-gnu')
           const bindingPackageVersion = require('lingua-rs-linux-x64-gnu/package.json').version
           if (
-            bindingPackageVersion !== '0.1.3' &&
+            bindingPackageVersion !== '0.1.4' &&
             process.env.NAPI_RS_ENFORCE_VERSION_CHECK &&
             process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0'
           ) {
             throw new Error(
-              `Native binding package version mismatch, expected 0.1.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
+              `Native binding package version mismatch, expected 0.1.4 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
             )
           }
           return binding
@@ -181,12 +181,12 @@ function requireNative() {
           const binding = require('lingua-rs-linux-arm64-gnu')
           const bindingPackageVersion = require('lingua-rs-linux-arm64-gnu/package.json').version
           if (
-            bindingPackageVersion !== '0.1.3' &&
+            bindingPackageVersion !== '0.1.4' &&
             process.env.NAPI_RS_ENFORCE_VERSION_CHECK &&
             process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== '0'
           ) {
             throw new Error(
-              `Native binding package version mismatch, expected 0.1.3 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
+              `Native binding package version mismatch, expected 0.1.4 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`,
             )
           }
           return binding

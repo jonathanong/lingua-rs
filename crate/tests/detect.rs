@@ -137,10 +137,7 @@ fn result_metadata_is_populated() {
     let opts = DetectionOptions::default();
     let result = detect("This is an English sentence.", &opts);
     assert_eq!(result.detector, "lingua");
-    // detector_model_version should be a non-empty semver-ish string.
-    assert!(!result.detector_model_version.is_empty());
-    let parts: Vec<&str> = result.detector_model_version.split('.').collect();
-    assert!(parts.len() >= 2, "expected semver-like version string");
+    assert_eq!(result.detector_model_version, "1.8.0");
 }
 
 // ── Low accuracy mode ─────────────────────────────────────────────────────────

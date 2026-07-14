@@ -44,7 +44,7 @@ describe('detectLanguage', () => {
   it('returns detector metadata', async () => {
     const result = await detectLanguage(buf('This is an English sentence.'))
     expect(result.detector).toBe('lingua')
-    expect(result.detectorModelVersion).toMatch(/^\d+\.\d+/)
+    expect(result.detectorModelVersion).toBe('1.8.0')
   })
 
   it('rejects invalid UTF-8 Buffer', async () => {
