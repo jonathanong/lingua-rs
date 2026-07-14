@@ -215,7 +215,7 @@ jobs:
       - name: Upload binary to GitHub release
         working-directory: package
         shell: bash
-        run: gh release upload "v${{ needs.prepare.outputs.version }}" *.node --clobber
+        run: gh release upload "v${{ needs.prepare.outputs.version }}" ./*.node --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
