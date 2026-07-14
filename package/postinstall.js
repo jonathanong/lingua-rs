@@ -14,6 +14,7 @@ const { version } = require('./package.json')
 
 const MAX_REDIRECTS = 5
 const MAX_CHECKSUM_BYTES = 1024
+const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
 
 const BINARY_MAP = {
@@ -24,16 +25,48 @@ const BINARY_MAP = {
   'win32-x64': 'lingua_rs.win32-x64-msvc.node',
 }
 
-function hashFile(filename, cb) {
-  const hash = crypto.createHash('sha256')
-  const file = fs.createReadStream(filename)
-  let checksum
+function once(cb) {
   let finished = false
-  const done = (err, value) => {
+  return (err, value) => {
     if (finished) return
     finished = true
     cb(err, value)
   }
+}
+
+function request(url, cb, { redirectCount = 0, get = https.get } = {}) {
+  const done = once(cb)
+  get(url, (res) => {
+    if (res.statusCode === 301 || res.statusCode === 302) {
+      res.on('error', ignoreRedirectDrainError)
+      res.resume()
+      const location = res.headers.location && new URL(res.headers.location, url).toString()
+      if (!location) {
+        done(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
+        return
+      }
+      if (redirectCount >= MAX_REDIRECTS) {
+        done(new Error(`Too many redirects fetching ${location}`))
+        return
+      }
+      request(location, done, { redirectCount: redirectCount + 1, get })
+      return
+    }
+    if (res.statusCode !== 200) {
+      res.on('error', ignoreRedirectDrainError)
+      res.resume()
+      done(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+      return
+    }
+    done(null, res)
+  }).on('error', done)
+}
+
+function hashFile(filename, cb) {
+  const done = once(cb)
+  const hash = crypto.createHash('sha256')
+  const file = fs.createReadStream(filename)
+  let checksum
   file.on('error', (err) => done(err))
   file.on('data', (chunk) => hash.update(chunk))
   file.on('end', () => {
@@ -46,46 +79,29 @@ function hashFile(filename, cb) {
 
 function parseChecksum(contents, binaryName) {
   if (typeof contents !== 'string') {
+    throw new TypeError(`Invalid checksum for ${binaryName}`)
+  }
+  const line = contents.trim()
+  const checksum = line.slice(0, 64).toLowerCase()
+  const separator = line.slice(64, 66)
+  const filename = line.slice(66)
+  const checksumIsHex =
+    checksum.length === 64 && [...checksum].every((character) => HEX_DIGITS.includes(character))
+  if (!checksumIsHex || separator !== '  ' || filename !== binaryName) {
     throw new Error(`Invalid checksum for ${binaryName}`)
   }
-  const match = /^([a-f\d]{64})[ \t]+\*?(.+)$/i.exec(contents.trim())
-  if (!match || match[2] !== binaryName) {
-    throw new Error(`Invalid checksum for ${binaryName}`)
-  }
-  return match[1].toLowerCase()
+  return checksum
 }
 
 function fetchText(url, cb, redirectCount = 0, get = https.get) {
-  get(url, (res) => {
-    if (res.statusCode === 301 || res.statusCode === 302) {
-      res.on('error', ignoreRedirectDrainError)
-      res.resume()
-      const location = res.headers.location && new URL(res.headers.location, url).toString()
-      if (!location) {
-        cb(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
-        return
-      }
-      if (redirectCount >= MAX_REDIRECTS) {
-        cb(new Error(`Too many redirects fetching ${location}`))
-        return
-      }
-      fetchText(location, cb, redirectCount + 1, get)
-      return
-    }
-    if (res.statusCode !== 200) {
-      res.on('error', ignoreRedirectDrainError)
-      res.resume()
-      cb(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+  request(url, (requestError, res) => {
+    if (requestError) {
+      cb(requestError)
       return
     }
 
     let contents = ''
-    let finished = false
-    const done = (err, value) => {
-      if (finished) return
-      finished = true
-      cb(err, value)
-    }
+    const done = once(cb)
     res.setEncoding('utf8')
     res.on('data', (chunk) => {
       contents += chunk
@@ -95,28 +111,13 @@ function fetchText(url, cb, redirectCount = 0, get = https.get) {
     })
     res.on('error', (err) => done(err))
     res.on('end', () => done(null, contents))
-  }).on('error', cb)
+  }, { redirectCount, get })
 }
 
-function download(url, dest, cb, redirectCount = 0, get = https.get, expectedChecksum) {
-  get(url, (res) => {
-    if (res.statusCode === 301 || res.statusCode === 302) {
-      res.on('error', ignoreRedirectDrainError)
-      res.resume()
-      const location = res.headers.location && new URL(res.headers.location, url).toString()
-      if (!location) {
-        cb(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
-        return
-      }
-      if (redirectCount >= MAX_REDIRECTS) {
-        cb(new Error(`Too many redirects fetching ${location}`))
-        return
-      }
-      download(location, dest, cb, redirectCount + 1, get, expectedChecksum)
-      return
-    }
-    if (res.statusCode !== 200) {
-      cb(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+function download(url, dest, cb, { get = https.get, expectedChecksum } = {}) {
+  request(url, (requestError, res) => {
+    if (requestError) {
+      cb(requestError)
       return
     }
     const tmp = dest + '.tmp'
@@ -151,16 +152,23 @@ function download(url, dest, cb, redirectCount = 0, get = https.get, expectedChe
         install()
       })
     })
-  }).on('error', cb)
+  }, { get })
 }
 
-function install({
+function callbackPromise(run) {
+  return new Promise((resolve, reject) => {
+    run((error, value) => (error ? reject(error) : resolve(value)))
+  })
+}
+
+async function install({
   platform = process.platform,
   arch = process.arch,
   directory = __dirname,
   fetchChecksum = fetchText,
   hashExistingFile = hashFile,
-  downloadFile = (url, dest, checksum, cb) => download(url, dest, cb, 0, https.get, checksum),
+  downloadFile = (url, dest, checksum, cb) =>
+    download(url, dest, cb, { expectedChecksum: checksum }),
 } = {}) {
   const platformKey = `${platform}-${arch}`
   const binaryName = BINARY_MAP[platformKey]
@@ -169,52 +177,42 @@ function install({
     console.warn(
       `[lingua-rs] unsupported platform ${platformKey} — language detection will fail at runtime`,
     )
-    return Promise.resolve()
+    return
   }
 
   const dest = path.join(directory, binaryName)
   const url = `https://github.com/jonathanong/lingua-rs/releases/download/v${version}/${binaryName}`
   const checksumUrl = `${url}.sha256`
 
-  return new Promise((resolve) => {
-    fetchChecksum(checksumUrl, (checksumError, contents) => {
-      let expectedChecksum
-      try {
-        if (checksumError) throw checksumError
-        expectedChecksum = parseChecksum(contents, binaryName)
-      } catch (error) {
-        console.warn(
-          `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: ${error.message}`,
-        )
-        resolve()
-        return
-      }
+  let expectedChecksum
+  try {
+    const contents = await callbackPromise((cb) => fetchChecksum(checksumUrl, cb))
+    expectedChecksum = parseChecksum(contents, binaryName)
+  } catch {
+    console.warn(`[lingua-rs] failed to fetch a valid checksum for ${binaryName}`)
+    return
+  }
 
-      const downloadCurrentRelease = () => {
-        console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
-        downloadFile(url, dest, expectedChecksum, (err) => {
-          if (err) {
-            console.warn(
-              `[lingua-rs] failed to download ${binaryName}: ${err.message}\n` +
-                '  The existing binary, if any, was left unchanged.',
-            )
-          } else {
-            console.log(`[lingua-rs] installed ${binaryName}`)
-          }
-          resolve()
-        })
-      }
+  let actualChecksum
+  try {
+    actualChecksum = await callbackPromise((cb) => hashExistingFile(dest, cb))
+  } catch {}
+  if (actualChecksum === expectedChecksum) {
+    console.log(`[lingua-rs] ${binaryName} is up to date`)
+    return
+  }
 
-      hashExistingFile(dest, (hashError, actualChecksum) => {
-        if (!hashError && actualChecksum === expectedChecksum) {
-          console.log(`[lingua-rs] ${binaryName} is up to date`)
-          resolve()
-          return
-        }
-        downloadCurrentRelease()
-      })
-    })
-  })
+  console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
+  try {
+    await callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb))
+  } catch {
+    console.warn(
+      `[lingua-rs] failed to download ${binaryName}.\n` +
+        '  The existing binary, if any, was left unchanged.',
+    )
+    return
+  }
+  console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
 if (require.main === module) void install()

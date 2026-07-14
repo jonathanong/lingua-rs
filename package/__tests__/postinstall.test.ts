@@ -10,9 +10,10 @@ const { download, fetchText, install, parseChecksum, MAX_REDIRECTS } = require('
     url: string,
     dest: string,
     callback: (error: Error | null) => void,
-    redirectCount?: number,
-    get?: (url: string, callback: (response: FakeResponse) => void) => PassThrough,
-    expectedChecksum?: string,
+    options?: {
+      get?: (url: string, callback: (response: FakeResponse) => void) => PassThrough
+      expectedChecksum?: string
+    },
   ) => void
   fetchText: (
     url: string,
@@ -91,7 +92,7 @@ describe('postinstall download redirects', () => {
     const [get, requestUrls] = redirectingGet([redirect, failure])
 
     const error = await new Promise<Error | null>((resolve) => {
-      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, { get })
     })
 
     expect(redirect.resumeSpy).toHaveBeenCalledOnce()
@@ -111,7 +112,7 @@ describe('postinstall download redirects', () => {
     const [get, requestUrls] = redirectingGet([redirect, failure])
 
     await new Promise<Error | null>((resolve) => {
-      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, { get })
     })
 
     expect(() => redirect.emit('error', new Error('connection reset'))).not.toThrow()
@@ -124,7 +125,7 @@ describe('postinstall download redirects', () => {
     const [get, requestUrls] = redirectingGet([redirect, failure])
 
     await new Promise<Error | null>((resolve) => {
-      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, { get })
     })
 
     expect(requestUrls.mock.calls).toEqual([
@@ -141,7 +142,7 @@ describe('postinstall download redirects', () => {
     const [get, requestUrls] = redirectingGet([...redirects])
 
     const error = await new Promise<Error | null>((resolve) => {
-      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, 0, get)
+      download('https://example.test/release', '/tmp/lingua-rs-test', resolve, { get })
     })
 
     expect(requestUrls).toHaveBeenCalledTimes(MAX_REDIRECTS + 1)
@@ -163,9 +164,7 @@ describe('postinstall download redirects', () => {
           'https://example.test/release',
           destination,
           resolve,
-          0,
-          get,
-          checksumOf(expectedArtifact),
+          { get, expectedChecksum: checksumOf(expectedArtifact) },
         )
       })
       success.end(expectedArtifact)
@@ -188,7 +187,7 @@ describe('postinstall download redirects', () => {
 
     try {
       const downloadFinished = new Promise<Error | null>((resolve) => {
-        download('https://example.test/binary', destination, resolve, 0, get)
+        download('https://example.test/binary', destination, resolve, { get })
       })
       response.write('partial artifact')
       response.emit('error', expectedError)
@@ -216,9 +215,7 @@ describe('postinstall download redirects', () => {
           'https://example.test/binary',
           destination,
           resolve,
-          0,
-          get,
-          checksumOf('expected-version'),
+          { get, expectedChecksum: checksumOf('expected-version') },
         )
       })
       response.end('corrupt-version')
@@ -367,7 +364,7 @@ describe('postinstall installation', () => {
       expect(downloadFile).not.toHaveBeenCalled()
       await expect(readFile(destination)).resolves.toEqual(previousArtifact)
       expect(warn).toHaveBeenCalledWith(
-        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: network unavailable`,
+        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}`,
       )
     } finally {
       warn.mockRestore()
