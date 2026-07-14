@@ -31,7 +31,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 11
+          version: 11.7.0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
