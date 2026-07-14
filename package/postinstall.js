@@ -7,6 +7,7 @@
 const https = require('node:https')
 const fs = require('node:fs')
 const path = require('node:path')
+const { pipeline } = require('node:stream')
 
 const { version } = require('./package.json')
 
@@ -44,29 +45,19 @@ function download(url, dest, cb, redirectCount = 0, get = https.get) {
     }
     const tmp = dest + '.tmp'
     const file = fs.createWriteStream(tmp)
-    res.pipe(file)
-    file.on('finish', () => {
-      file.close((err) => {
-        if (err) {
-          cb(err)
-          return
-        }
-        try {
-          fs.renameSync(tmp, dest)
-        } catch (e) {
-          cb(e)
-          return
-        }
-        cb(null)
-      })
-    })
-    file.on('error', (err) => {
-      try { fs.unlinkSync(tmp) } catch {}
-      cb(err)
-    })
-    res.on('error', (err) => {
+    pipeline(res, file, (err) => {
+      if (err) {
         try { fs.unlinkSync(tmp) } catch {}
-      cb(err)
+        cb(err)
+        return
+      }
+      try {
+        fs.renameSync(tmp, dest)
+      } catch (e) {
+        cb(e)
+        return
+      }
+      cb(null)
     })
   }).on('error', cb)
 }

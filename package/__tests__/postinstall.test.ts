@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -136,4 +136,27 @@ describe('postinstall download redirects', () => {
     }
   })
 
+  it('destroys the response and removes the temporary file on stream errors', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'lingua-rs-postinstall-'))
+    const destination = join(directory, 'lingua_rs.test.node')
+    const temporary = `${destination}.tmp`
+    const response = new FakeResponse(200)
+    const [get] = redirectingGet([response])
+    const expectedError = new Error('connection reset')
+
+    try {
+      const downloadFinished = new Promise<Error | null>((resolve) => {
+        download('https://example.test/binary', destination, resolve, 0, get)
+      })
+      response.write('partial artifact')
+      response.emit('error', expectedError)
+
+      await expect(downloadFinished).resolves.toBe(expectedError)
+      await new Promise((resolve) => setImmediate(resolve))
+      expect(response.destroyed).toBe(true)
+      await expect(access(temporary)).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
 })
