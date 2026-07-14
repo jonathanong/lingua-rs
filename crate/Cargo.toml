@@ -10,3 +10,6 @@ categories = ["text-processing"]
 
 [dependencies]
 lingua = "1.8.0"
+
+[build-dependencies]
+cargo-lock = { version = "11", default-features = false }

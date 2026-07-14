@@ -15,6 +15,8 @@
 use lingua::{Language, LanguageDetector, LanguageDetectorBuilder};
 use std::sync::OnceLock;
 
+const LINGUA_VERSION: &str = env!("LINGUA_VERSION");
+
 // ── Globals — built once, reused across all calls ────────────────────────────
 
 static DETECTOR_FULL: OnceLock<LanguageDetector> = OnceLock::new();
@@ -99,7 +101,7 @@ pub fn detect(text: &str, opts: &DetectionOptions) -> DetectionResult {
 
     DetectionResult {
         detector: "lingua".to_string(),
-        detector_model_version: env!("CARGO_PKG_VERSION").to_string(),
+        detector_model_version: LINGUA_VERSION.to_string(),
         languages,
     }
 }
