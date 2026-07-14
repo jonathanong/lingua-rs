@@ -94,7 +94,7 @@ function install() {
     if (err) {
       try { fs.unlinkSync(dest) } catch {}
       console.warn(
-        `[lingua-rs] failed to download ${binaryName}: ${err.message}\n` +
+        `[lingua-rs] failed to download ${binaryName}.\n` +
           '  Language detection will fail at runtime until the binary is available.',
       )
       process.exit(0)
