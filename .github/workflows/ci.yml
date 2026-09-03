@@ -11,13 +11,14 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
 jobs:
   test:
     name: Test
     runs-on: ubuntu-slim
     timeout-minutes: 420
+    permissions:
+      id-token: write
 
     steps:
       - name: Checkout
@@ -80,10 +81,9 @@ jobs:
             --output-path target/llvm-cov/lcov.info
 
       - name: Upload Rust coverage to Codecov
-        if: ${{ env.CODECOV_TOKEN != '' }}
         uses: codecov/codecov-action@v7
         with:
-          token: ${{ env.CODECOV_TOKEN }}
+          use_oidc: true
           files: target/llvm-cov/lcov.info
           flags: rust
           fail_ci_if_error: true
