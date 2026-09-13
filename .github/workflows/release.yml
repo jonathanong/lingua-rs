@@ -264,6 +264,33 @@ jobs:
         working-directory: package
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Verify Linux release asset before publishing
+        timeout-minutes: 10
+        working-directory: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary='lingua_rs.linux-x64-gnu.node'
+          trap 'rm -f -- "$binary" "$binary.tmp"' EXIT
+          node <<'NODE'
+          const { install } = require('./postinstall.js')
+
+          void (async () => {
+            await install({ strict: true, platform: 'linux', arch: 'x64' })
+
+            const { detectLanguage } = require('./index.js')
+            const result = await detectLanguage(
+              Buffer.from('The quick brown fox jumps over the lazy dog. This is clearly English text.'),
+            )
+            if (result.languages[0]?.iso6391 !== 'en') {
+              throw new Error(`Expected English from the published Linux binary, got ${JSON.stringify(result)}`)
+            }
+          })().catch((error) => {
+            console.error(error)
+            process.exitCode = 1
+          })
+          NODE
+
       - name: Publish npm package
         shell: bash
         working-directory: package

@@ -5,21 +5,38 @@ import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it, vi } from 'vitest'
 
-const { download, fetchText, install, parseChecksum, MAX_REDIRECTS } = require('../postinstall') as {
+const {
+  download,
+  fetchText,
+  install,
+  parseChecksum,
+  MAX_REDIRECTS,
+} = require('../postinstall') as {
   download: (
     url: string,
     dest: string,
     callback: (error: Error | null) => void,
     options?: {
-      get?: (url: string, callback: (response: FakeResponse) => void) => PassThrough
+      get?: (
+        url: string,
+        options: { signal: AbortSignal },
+        callback: (response: FakeResponse) => void,
+      ) => PassThrough
       expectedChecksum?: string
+      preResponseTimeoutMs?: number
+      bodyInactivityTimeoutMs?: number
     },
   ) => void
   fetchText: (
     url: string,
     callback: (error: Error | null, contents?: string) => void,
     redirectCount?: number,
-    get?: (url: string, callback: (response: FakeResponse) => void) => PassThrough,
+    get?: (
+      url: string,
+      options: { signal: AbortSignal },
+      callback: (response: FakeResponse) => void,
+    ) => PassThrough,
+    timeoutOptions?: { preResponseTimeoutMs?: number; bodyInactivityTimeoutMs?: number },
   ) => void
   install: (options?: {
     platform?: NodeJS.Platform
@@ -39,6 +56,7 @@ const { download, fetchText, install, parseChecksum, MAX_REDIRECTS } = require('
       checksum: string,
       callback: (error: Error | null) => void,
     ) => void
+    strict?: boolean
   }) => Promise<void>
   parseChecksum: (contents: string, binaryName: string) => string
   MAX_REDIRECTS: number
@@ -71,11 +89,19 @@ class FakeResponse extends PassThrough {
 function redirectingGet(
   responses: FakeResponse[],
 ): [
-  (url: string, callback: (response: FakeResponse) => void) => PassThrough,
+  (
+    url: string,
+    options: { signal: AbortSignal },
+    callback: (response: FakeResponse) => void,
+  ) => PassThrough,
   ReturnType<typeof vi.fn>,
 ] {
   const requestUrls = vi.fn()
-  const get = (url: string, callback: (response: FakeResponse) => void): PassThrough => {
+  const get = (
+    url: string,
+    _options: { signal: AbortSignal },
+    callback: (response: FakeResponse) => void,
+  ): PassThrough => {
     requestUrls(url)
     const response = responses.shift()
     if (!response) throw new Error(`Missing response for ${url}`)
@@ -264,6 +290,260 @@ describe('postinstall checksum fetch', () => {
   })
 })
 
+describe('postinstall request timeouts', () => {
+  it('uses a 30-second timeout by default', async () => {
+    vi.useFakeTimers()
+    const request = new PassThrough()
+    const get = vi.fn(() => request)
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/checksum',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+      )
+    })
+
+    try {
+      const timedOut = expect(fetched).rejects.toMatchObject({
+        code: 'ETIMEDOUT',
+        timeoutMs: 30_000,
+      })
+      await vi.advanceTimersByTimeAsync(29_999)
+      expect(request.destroyed).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      await timedOut
+      expect(request.destroyed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts a request that never receives response headers', async () => {
+    vi.useFakeTimers()
+    const request = new PassThrough()
+    let signal: AbortSignal | undefined
+    const get = vi.fn((_url, options, _callback) => {
+      signal = options.signal
+      return request
+    })
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/checksum',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+        { preResponseTimeoutMs: 10, bodyInactivityTimeoutMs: 10 },
+      )
+    })
+
+    try {
+      const timedOut = expect(fetched).rejects.toMatchObject({
+        code: 'ETIMEDOUT',
+        phase: 'pre-response',
+        url: 'https://example.test/checksum',
+        timeoutMs: 10,
+        message:
+          'lingua-rs timed out after 10ms waiting for pre-response from https://example.test/checksum',
+      })
+      await vi.advanceTimersByTimeAsync(10)
+      await timedOut
+      expect(request.destroyed).toBe(true)
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts a checksum response that stops producing body data', async () => {
+    vi.useFakeTimers()
+    const response = new FakeResponse(200)
+    const request = new PassThrough()
+    let signal: AbortSignal | undefined
+    const get = vi.fn((_url, options, callback) => {
+      signal = options.signal
+      callback(response)
+      return request
+    })
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/checksum',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+        { preResponseTimeoutMs: 10, bodyInactivityTimeoutMs: 10 },
+      )
+    })
+    response.write('partial')
+
+    try {
+      const timedOut = expect(fetched).rejects.toMatchObject({
+        code: 'ETIMEDOUT',
+        phase: 'body',
+        url: 'https://example.test/checksum',
+        timeoutMs: 10,
+        message:
+          'lingua-rs timed out after 10ms waiting for body from https://example.test/checksum',
+      })
+      await vi.advanceTimersByTimeAsync(10)
+      await timedOut
+      expect(response.destroyed).toBe(true)
+      expect(request.destroyed).toBe(true)
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects a checksum response that closes before it ends', async () => {
+    const response = new FakeResponse(200)
+    const request = new PassThrough()
+    const get = (
+      _url: string,
+      _options: { signal: AbortSignal },
+      callback: (response: FakeResponse) => void,
+    ) => {
+      callback(response)
+      return request
+    }
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/checksum',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+      )
+    })
+
+    response.write('partial')
+    response.destroy()
+
+    await expect(fetched).rejects.toThrow(
+      'Response closed before completion fetching https://example.test/checksum',
+    )
+  })
+
+  it('resets the body timeout when checksum data continues arriving', async () => {
+    vi.useFakeTimers()
+    const response = new FakeResponse(200)
+    const request = new PassThrough()
+    const get = (
+      _url: string,
+      _options: { signal: AbortSignal },
+      callback: (response: FakeResponse) => void,
+    ) => {
+      callback(response)
+      return request
+    }
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/checksum',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+        { preResponseTimeoutMs: 10, bodyInactivityTimeoutMs: 10 },
+      )
+    })
+
+    try {
+      response.write('one')
+      await vi.advanceTimersByTimeAsync(9)
+      response.write('two')
+      await vi.advanceTimersByTimeAsync(9)
+      response.end('three')
+      await expect(fetched).resolves.toBe('onetwothree')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shares the pre-response deadline across redirect hops', async () => {
+    vi.useFakeTimers()
+    const redirect = new FakeResponse(302, 'https://example.test/final')
+    const requests = [new PassThrough(), new PassThrough()]
+    const requestUrls = vi.fn()
+    const get = (
+      url: string,
+      _options: { signal: AbortSignal },
+      callback: (response: FakeResponse) => void,
+    ) => {
+      requestUrls(url)
+      if (url.endsWith('/release')) setTimeout(() => callback(redirect), 6)
+      return requests.shift() as PassThrough
+    }
+    const fetched = new Promise<string | undefined>((resolve, reject) => {
+      fetchText(
+        'https://example.test/release',
+        (error, contents) => (error ? reject(error) : resolve(contents)),
+        0,
+        get,
+        { preResponseTimeoutMs: 10, bodyInactivityTimeoutMs: 10 },
+      )
+    })
+
+    try {
+      const timedOut = expect(fetched).rejects.toMatchObject({
+        code: 'ETIMEDOUT',
+        phase: 'pre-response',
+        url: 'https://example.test/final',
+        timeoutMs: 10,
+      })
+      await vi.advanceTimersByTimeAsync(9)
+      expect(requestUrls).toHaveBeenCalledTimes(2)
+      await vi.advanceTimersByTimeAsync(1)
+      await timedOut
+      expect(redirect.destroyed).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('removes a partial native artifact when its response stalls', async () => {
+    vi.useFakeTimers()
+    const directory = await mkdtemp(join(tmpdir(), 'lingua-rs-postinstall-'))
+    const destination = join(directory, 'lingua_rs.test.node')
+    const previousArtifact = Buffer.from('previous artifact')
+    const response = new FakeResponse(200)
+    const request = new PassThrough()
+    const get = (
+      _url: string,
+      _options: { signal: AbortSignal },
+      callback: (response: FakeResponse) => void,
+    ) => {
+      callback(response)
+      return request
+    }
+
+    try {
+      await writeFile(destination, previousArtifact)
+      const downloadFinished = new Promise<Error | null>((resolve) => {
+        download('https://example.test/binary', destination, resolve, {
+          get,
+          expectedChecksum: checksumOf('complete artifact'),
+          preResponseTimeoutMs: 10,
+          bodyInactivityTimeoutMs: 10,
+        })
+      })
+      response.write('partial artifact')
+      await vi.advanceTimersByTimeAsync(10)
+
+      await expect(downloadFinished).resolves.toMatchObject({
+        code: 'ETIMEDOUT',
+        phase: 'body',
+        url: 'https://example.test/binary',
+        timeoutMs: 10,
+      })
+      expect(response.destroyed).toBe(true)
+      await expect(access(`${destination}.tmp`)).rejects.toMatchObject({ code: 'ENOENT' })
+      await expect(readFile(destination)).resolves.toEqual(previousArtifact)
+    } finally {
+      vi.useRealTimers()
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('postinstall installation', () => {
   it('skips the binary download when the installed checksum matches', async () => {
     const expectedChecksum = checksumOf('current-version')
@@ -364,11 +644,89 @@ describe('postinstall installation', () => {
       expect(downloadFile).not.toHaveBeenCalled()
       await expect(readFile(destination)).resolves.toEqual(previousArtifact)
       expect(warn).toHaveBeenCalledWith(
-        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}`,
+        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: network unavailable`,
       )
     } finally {
       warn.mockRestore()
       await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('rethrows the exact checksum error in strict mode', async () => {
+    const error = new Error('checksum service unavailable')
+    const fetchChecksum = vi.fn((_url, callback) => callback(error))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      await expect(
+        install({ platform: 'darwin', arch: 'arm64', fetchChecksum, strict: true }),
+      ).rejects.toBe(error)
+      expect(warn).toHaveBeenCalledWith(
+        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: checksum service unavailable`,
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('reports download failures and rethrows them in strict mode', async () => {
+    const expectedChecksum = checksumOf('current-version')
+    const error = new Error('binary response timed out')
+    const fetchChecksum = vi.fn((_url, callback) => callback(null, checksumFile(expectedChecksum)))
+    const hashExistingFile = vi.fn((_filename, callback) => callback(new Error('ENOENT')))
+    const downloadFile = vi.fn((_url, _dest, _checksum, callback) => callback(error))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      await expect(
+        install({
+          platform: 'darwin',
+          arch: 'arm64',
+          fetchChecksum,
+          hashExistingFile,
+          downloadFile,
+          strict: true,
+        }),
+      ).rejects.toBe(error)
+      expect(warn).toHaveBeenCalledWith(
+        `[lingua-rs] failed to download ${binaryName}.\n` +
+          '  binary response timed out\n' +
+          '  The existing binary, if any, was left unchanged.',
+      )
+    } finally {
+      log.mockRestore()
+      warn.mockRestore()
+    }
+  })
+
+  it('reports download failures without rejecting by default', async () => {
+    const expectedChecksum = checksumOf('current-version')
+    const error = new Error('binary response timed out')
+    const fetchChecksum = vi.fn((_url, callback) => callback(null, checksumFile(expectedChecksum)))
+    const hashExistingFile = vi.fn((_filename, callback) => callback(new Error('ENOENT')))
+    const downloadFile = vi.fn((_url, _dest, _checksum, callback) => callback(error))
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+
+    try {
+      await expect(
+        install({
+          platform: 'darwin',
+          arch: 'arm64',
+          fetchChecksum,
+          hashExistingFile,
+          downloadFile,
+        }),
+      ).resolves.toBeUndefined()
+      expect(warn).toHaveBeenCalledWith(
+        `[lingua-rs] failed to download ${binaryName}.\n` +
+          '  binary response timed out\n' +
+          '  The existing binary, if any, was left unchanged.',
+      )
+    } finally {
+      log.mockRestore()
+      warn.mockRestore()
     }
   })
 })

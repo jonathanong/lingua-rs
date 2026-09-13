@@ -14,9 +14,9 @@ const { version } = require('./package.json')
 
 const MAX_REDIRECTS = 5
 const MAX_CHECKSUM_BYTES = 1024
+const REQUEST_TIMEOUT_MS = 30_000
 const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
-
 const BINARY_MAP = {
   'darwin-arm64': 'lingua_rs.darwin-arm64.node',
   'darwin-x64': 'lingua_rs.darwin-x64.node',
@@ -34,32 +34,136 @@ function once(cb) {
   }
 }
 
-function request(url, cb, { redirectCount = 0, get = https.get } = {}) {
+function timeoutError(phase, url, timeoutMs) {
+  const error = new Error(`lingua-rs timed out after ${timeoutMs}ms waiting for ${phase} from ${url}`)
+  error.code = 'ETIMEDOUT'
+  error.phase = phase
+  error.url = url
+  error.timeoutMs = timeoutMs
+  return error
+}
+
+function request(
+  url,
+  cb,
+  {
+    redirectCount = 0,
+    get = https.get,
+    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
+    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+    state,
+  } = {},
+) {
   const done = once(cb)
-  get(url, (res) => {
-    if (res.statusCode === 301 || res.statusCode === 302) {
-      res.on('error', ignoreRedirectDrainError)
-      res.resume()
-      const location = res.headers.location && new URL(res.headers.location, url).toString()
-      if (!location) {
-        done(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
+  const deadline = state?.preResponseDeadline ?? Date.now() + preResponseTimeoutMs
+  const controller = new AbortController()
+  let requestObject
+  let response
+  let preResponseTimer
+  let bodyTimer
+  let responseDone = false
+  let responseDelivered = false
+
+  const clearPreResponseTimer = () => {
+    if (preResponseTimer) clearTimeout(preResponseTimer)
+    preResponseTimer = undefined
+  }
+  const clearBodyTimer = () => {
+    if (bodyTimer) clearTimeout(bodyTimer)
+    bodyTimer = undefined
+  }
+  const destroy = (error) => {
+    if (response && !response.destroyed) response.destroy(error)
+    if (requestObject && !requestObject.destroyed) requestObject.destroy(error)
+    controller.abort(error)
+  }
+  const timeout = (phase, timeoutMs) => {
+    const error = timeoutError(phase, url, timeoutMs)
+    clearPreResponseTimer()
+    clearBodyTimer()
+    if (phase === 'pre-response' || !responseDelivered) done(error)
+    destroy(error)
+  }
+  const resetBodyTimer = () => {
+    clearBodyTimer()
+    bodyTimer = setTimeout(() => timeout('body', bodyInactivityTimeoutMs), bodyInactivityTimeoutMs)
+    if (bodyTimer.unref) bodyTimer.unref()
+  }
+  const monitorBody = (res) => {
+    response = res
+    responseDone = false
+    resetBodyTimer()
+    res.on('data', resetBodyTimer)
+    res.once('end', () => {
+      responseDone = true
+      clearBodyTimer()
+    })
+    res.once('error', () => {
+      responseDone = true
+      clearBodyTimer()
+    })
+    res.once('aborted', () => {
+      if (responseDone) return
+      responseDone = true
+      clearBodyTimer()
+    })
+    res.once('close', () => {
+      responseDone = true
+      clearBodyTimer()
+    })
+  }
+
+  const remaining = deadline - Date.now()
+  if (remaining <= 0) {
+    done(timeoutError('pre-response', url, preResponseTimeoutMs))
+    return
+  }
+  preResponseTimer = setTimeout(() => timeout('pre-response', preResponseTimeoutMs), remaining)
+  try {
+    requestObject = get(url, { signal: controller.signal }, (res) => {
+      clearPreResponseTimer()
+      response = res
+
+      if (res.statusCode === 301 || res.statusCode === 302) {
+        res.on('error', ignoreRedirectDrainError)
+        res.resume()
+        res.destroy()
+        const location = res.headers.location && new URL(res.headers.location, url).toString()
+        if (!location) {
+          done(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
+          return
+        }
+        if (redirectCount >= MAX_REDIRECTS) {
+          done(new Error(`Too many redirects fetching ${location}`))
+          return
+        }
+        request(location, done, {
+          redirectCount: redirectCount + 1,
+          get,
+          preResponseTimeoutMs,
+          bodyInactivityTimeoutMs,
+          state: { preResponseDeadline: deadline },
+        })
         return
       }
-      if (redirectCount >= MAX_REDIRECTS) {
-        done(new Error(`Too many redirects fetching ${location}`))
+      if (res.statusCode !== 200) {
+        res.on('error', ignoreRedirectDrainError)
+        res.resume()
+        res.destroy()
+        done(new Error(`HTTP ${res.statusCode} fetching ${url}`))
         return
       }
-      request(location, done, { redirectCount: redirectCount + 1, get })
-      return
-    }
-    if (res.statusCode !== 200) {
-      res.on('error', ignoreRedirectDrainError)
-      res.resume()
-      done(new Error(`HTTP ${res.statusCode} fetching ${url}`))
-      return
-    }
-    done(null, res)
-  }).on('error', done)
+      monitorBody(res)
+      responseDelivered = true
+      done(null, res)
+    }).on('error', (error) => {
+      clearPreResponseTimer()
+      if (!response) done(error)
+    })
+  } catch (error) {
+    clearPreResponseTimer()
+    done(error)
+  }
 }
 
 function hashFile(filename, cb) {
@@ -93,7 +197,16 @@ function parseChecksum(contents, binaryName) {
   return checksum
 }
 
-function fetchText(url, cb, redirectCount = 0, get = https.get) {
+function fetchText(
+  url,
+  cb,
+  redirectCount = 0,
+  get = https.get,
+  {
+    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
+    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+  } = {},
+) {
   request(url, (requestError, res) => {
     if (requestError) {
       cb(requestError)
@@ -111,10 +224,23 @@ function fetchText(url, cb, redirectCount = 0, get = https.get) {
     })
     res.on('error', (err) => done(err))
     res.on('end', () => done(null, contents))
-  }, { redirectCount, get })
+    res.on('close', () => {
+      if (!res.readableEnded) done(new Error(`Response closed before completion fetching ${url}`))
+    })
+  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
 }
 
-function download(url, dest, cb, { get = https.get, expectedChecksum } = {}) {
+function download(
+  url,
+  dest,
+  cb,
+  {
+    get = https.get,
+    expectedChecksum,
+    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
+    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+  } = {},
+) {
   request(url, (requestError, res) => {
     if (requestError) {
       cb(requestError)
@@ -152,7 +278,7 @@ function download(url, dest, cb, { get = https.get, expectedChecksum } = {}) {
         install()
       })
     })
-  }, { get })
+  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
 }
 
 function callbackPromise(run) {
@@ -169,6 +295,7 @@ async function install({
   hashExistingFile = hashFile,
   downloadFile = (url, dest, checksum, cb) =>
     download(url, dest, cb, { expectedChecksum: checksum }),
+  strict = false,
 } = {}) {
   const platformKey = `${platform}-${arch}`
   const binaryName = BINARY_MAP[platformKey]
@@ -188,8 +315,11 @@ async function install({
   try {
     const contents = await callbackPromise((cb) => fetchChecksum(checksumUrl, cb))
     expectedChecksum = parseChecksum(contents, binaryName)
-  } catch {
-    console.warn(`[lingua-rs] failed to fetch a valid checksum for ${binaryName}`)
+  } catch (error) {
+    console.warn(
+      `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: ${errorMessage(error)}`,
+    )
+    if (strict) throw error
     return
   }
 
@@ -205,16 +335,29 @@ async function install({
   console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
   try {
     await callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb))
-  } catch {
+  } catch (error) {
     console.warn(
       `[lingua-rs] failed to download ${binaryName}.\n` +
+        `  ${errorMessage(error)}\n` +
         '  The existing binary, if any, was left unchanged.',
     )
+    if (strict) throw error
     return
   }
   console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error)
+}
+
 if (require.main === module) void install()
 
-module.exports = { download, fetchText, hashFile, install, parseChecksum, MAX_REDIRECTS }
+module.exports = {
+  download,
+  fetchText,
+  hashFile,
+  install,
+  parseChecksum,
+  MAX_REDIRECTS,
+}

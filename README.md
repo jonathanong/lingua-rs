@@ -12,6 +12,20 @@ Language detection for Node.js — wraps the [`lingua`](https://crates.io/crates
 npm install lingua-rs
 ```
 
+### Native binary download
+
+On supported platforms, the install script downloads the matching native binary from the GitHub
+release for the package version. It fetches the release checksum first and installs a downloaded
+binary only after its SHA-256 digest matches; the replacement is atomic, so a failed verification
+does not overwrite an existing binary.
+
+Each checksum and binary fetch is cancelled after 30 seconds without progress. The default
+install remains best-effort: a failed or timed-out native download leaves any existing binary in
+place, prints an actionable warning, and does not make `npm install` fail. Release publishing is
+stricter: after the Linux x64 release asset and checksum have been uploaded, the release workflow
+runs `install({ strict: true })`, loads that downloaded addon, verifies deterministic English
+detection, and removes the downloaded `.node` before publishing the npm package.
+
 ## Usage
 
 ```js
