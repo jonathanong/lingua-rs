@@ -45,8 +45,8 @@
   "devDependencies": {
     "@napi-rs/cli": "^3",
     "@types/node": "^26.1.0",
-    "@vitest/coverage-v8": "^4",
+    "@vitest/coverage-v8": "^5",
     "typescript": "^7",
-    "vitest": "^4"
+    "vitest": "^5"
   }
 }
