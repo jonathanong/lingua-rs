@@ -40,7 +40,7 @@ each plus up to 25%. Every retry logs one line with the attempt number, the reas
 The default install remains best-effort: after the retries, a failed or timed-out native download
 leaves any existing binary in place, prints an actionable warning, and does not make `npm install`
 fail. A consumer that must not ship without the native binary, such as a Docker image build, can
-fail closed by setting `LINGUA_RS_STRICT_INSTALL` to `1` or `true` for the install:
+fail closed by setting `LINGUA_RS_STRICT_INSTALL` for the install:
 
 ```sh
 LINGUA_RS_STRICT_INSTALL=1 pnpm install
@@ -49,8 +49,13 @@ LINGUA_RS_STRICT_INSTALL=1 pnpm install
 In a Dockerfile, use `ENV LINGUA_RS_STRICT_INSTALL=1` before the install step. With the variable
 set, the install script runs `install({ strict: true })`. If the binary still cannot be installed
 (the retries are exhausted, a failure is not retryable, or the platform is unsupported), it prints
-an error that names the variable and exits non-zero, so the package install fails. Any other value,
-including `0` and `false`, keeps the best-effort default.
+an error that names the variable and exits non-zero, so the package install fails. Use `1`; any
+value other than unset, empty, `0` or `false` turns strict mode on, so a typo fails closed. Those
+four values keep the best-effort default.
+
+Strict mode only applies when the install script runs. It does nothing under `--ignore-scripts`,
+or when the package manager does not allow `lingua-rs` to run its install script (for example
+pnpm's build-script allowlist), so also check that the native binding loads after the install.
 
 Release publishing is always strict: after the Linux x64 release asset and checksum have been
 uploaded, the release workflow runs `install({ strict: true })`, loads that downloaded addon,

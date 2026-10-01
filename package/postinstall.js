@@ -3,7 +3,7 @@
 // Transient failures are retried (see retry.js). Installation remains
 // best-effort: an existing binary is preserved until a verified replacement is
 // ready, and npm installation succeeds on failure, unless LINGUA_RS_STRICT_INSTALL
-// is set to 1 or true, which makes a failed install exit non-zero.
+// is set (for example to 1), which makes a failed install exit non-zero.
 'use strict'
 
 const https = require('node:https')
@@ -24,7 +24,7 @@ const MAX_REDIRECTS = 5
 const MAX_CHECKSUM_BYTES = 1024
 const REQUEST_TIMEOUT_MS = 30_000
 const STRICT_INSTALL_ENV = 'LINGUA_RS_STRICT_INSTALL'
-const STRICT_INSTALL_VALUES = new Set(['1', 'true'])
+const STRICT_INSTALL_OFF_VALUES = new Set(['', '0', 'false'])
 const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
 const BINARY_MAP = {
@@ -387,10 +387,11 @@ async function install({
   console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
-// Best-effort by default. Setting LINGUA_RS_STRICT_INSTALL to 1 or true makes
-// a failed install exit non-zero so the consumer's package install fails.
+// Best-effort by default. Any LINGUA_RS_STRICT_INSTALL value other than unset,
+// empty, 0 or false makes a failed install exit non-zero so the consumer's
+// package install fails. An unexpected value fails closed rather than open.
 function isStrictInstall(env = process.env) {
-  return STRICT_INSTALL_VALUES.has(String(env[STRICT_INSTALL_ENV] ?? '').trim().toLowerCase())
+  return !STRICT_INSTALL_OFF_VALUES.has(String(env[STRICT_INSTALL_ENV] ?? '').trim().toLowerCase())
 }
 
 async function main({ env = process.env, run = install } = {}) {

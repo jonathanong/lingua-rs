@@ -479,13 +479,19 @@ describe('install retries', () => {
 })
 
 describe('LINGUA_RS_STRICT_INSTALL', () => {
-  it.each(['1', 'true', 'TRUE', ' True '])('enables strict mode for %j', value => {
-    expect(isStrictInstall({ LINGUA_RS_STRICT_INSTALL: value })).toBe(true)
-  })
+  it.each(['1', 'true', 'TRUE', ' True ', 'yes', 'on', 'strict'])(
+    'enables strict mode for %j, so an unexpected value fails closed',
+    value => {
+      expect(isStrictInstall({ LINGUA_RS_STRICT_INSTALL: value })).toBe(true)
+    },
+  )
 
-  it.each(['0', 'false', '', 'yes', 'strict'])('keeps best-effort mode for %j', value => {
-    expect(isStrictInstall({ LINGUA_RS_STRICT_INSTALL: value })).toBe(false)
-  })
+  it.each(['0', 'false', 'FALSE', ' false ', '', '  '])(
+    'keeps best-effort mode for %j',
+    value => {
+      expect(isStrictInstall({ LINGUA_RS_STRICT_INSTALL: value })).toBe(false)
+    },
+  )
 
   it('defaults to best-effort mode and reads process.env', () => {
     expect(isStrictInstall({})).toBe(false)
