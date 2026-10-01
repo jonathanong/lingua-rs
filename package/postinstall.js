@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // Downloads the platform-specific native binary from the GitHub release.
-// Installation remains best-effort: an existing binary is preserved until a
-// verified replacement is ready, and npm installation succeeds on failure.
+// Transient failures are retried (see retry.js). Installation remains
+// best-effort: an existing binary is preserved until a verified replacement is
+// ready, and npm installation succeeds on failure, unless LINGUA_RS_STRICT_INSTALL
+// is set to 1 or true, which makes a failed install exit non-zero.
 'use strict'
 
 const https = require('node:https')
@@ -11,10 +13,18 @@ const path = require('node:path')
 const { pipeline } = require('node:stream')
 
 const { version } = require('./package.json')
+const {
+  CHECKSUM_MISMATCH_CODE,
+  RESPONSE_CLOSED_CODE,
+  errorMessage,
+  withRetry,
+} = require('./retry')
 
 const MAX_REDIRECTS = 5
 const MAX_CHECKSUM_BYTES = 1024
 const REQUEST_TIMEOUT_MS = 30_000
+const STRICT_INSTALL_ENV = 'LINGUA_RS_STRICT_INSTALL'
+const STRICT_INSTALL_VALUES = new Set(['1', 'true'])
 const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
 const BINARY_MAP = {
@@ -40,6 +50,21 @@ function timeoutError(phase, url, timeoutMs) {
   error.phase = phase
   error.url = url
   error.timeoutMs = timeoutMs
+  return error
+}
+
+// Carries the status and Retry-After header so the retry policy can classify
+// the failure without parsing the message.
+function httpError(res, url) {
+  const error = new Error(`HTTP ${res.statusCode} fetching ${url}`)
+  error.statusCode = res.statusCode
+  error.retryAfter = res.headers['retry-after']
+  return error
+}
+
+function codedError(message, code) {
+  const error = new Error(message)
+  error.code = code
   return error
 }
 
@@ -150,7 +175,7 @@ function request(
         res.on('error', ignoreRedirectDrainError)
         res.resume()
         res.destroy()
-        done(new Error(`HTTP ${res.statusCode} fetching ${url}`))
+        done(httpError(res, url))
         return
       }
       monitorBody(res)
@@ -225,7 +250,9 @@ function fetchText(
     res.on('error', (err) => done(err))
     res.on('end', () => done(null, contents))
     res.on('close', () => {
-      if (!res.readableEnded) done(new Error(`Response closed before completion fetching ${url}`))
+      if (!res.readableEnded) {
+        done(codedError(`Response closed before completion fetching ${url}`, RESPONSE_CLOSED_CODE))
+      }
     })
   }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
 }
@@ -272,7 +299,10 @@ function download(
       hashFile(tmp, (hashError, actualChecksum) => {
         if (hashError || actualChecksum !== expectedChecksum) {
           try { fs.unlinkSync(tmp) } catch {}
-          cb(hashError || new Error(`Checksum mismatch downloading ${url}`))
+          cb(
+            hashError ||
+              codedError(`Checksum mismatch downloading ${url}`, CHECKSUM_MISMATCH_CODE),
+          )
           return
         }
         install()
@@ -296,6 +326,7 @@ async function install({
   downloadFile = (url, dest, checksum, cb) =>
     download(url, dest, cb, { expectedChecksum: checksum }),
   strict = false,
+  retry = {},
 } = {}) {
   const platformKey = `${platform}-${arch}`
   const binaryName = BINARY_MAP[platformKey]
@@ -304,6 +335,7 @@ async function install({
     console.warn(
       `[lingua-rs] unsupported platform ${platformKey} — language detection will fail at runtime`,
     )
+    if (strict) throw new Error(`unsupported platform ${platformKey}`)
     return
   }
 
@@ -313,7 +345,11 @@ async function install({
 
   let expectedChecksum
   try {
-    const contents = await callbackPromise((cb) => fetchChecksum(checksumUrl, cb))
+    const contents = await withRetry(
+      `fetching ${binaryName}.sha256`,
+      () => callbackPromise((cb) => fetchChecksum(checksumUrl, cb)),
+      retry,
+    )
     expectedChecksum = parseChecksum(contents, binaryName)
   } catch (error) {
     console.warn(
@@ -334,7 +370,11 @@ async function install({
 
   console.log(`[lingua-rs] downloading ${binaryName} from GitHub release v${version}`)
   try {
-    await callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb))
+    await withRetry(
+      `downloading ${binaryName}`,
+      () => callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb)),
+      retry,
+    )
   } catch (error) {
     console.warn(
       `[lingua-rs] failed to download ${binaryName}.\n` +
@@ -347,17 +387,35 @@ async function install({
   console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
-function errorMessage(error) {
-  return error instanceof Error ? error.message : String(error)
+// Best-effort by default. Setting LINGUA_RS_STRICT_INSTALL to 1 or true makes
+// a failed install exit non-zero so the consumer's package install fails.
+function isStrictInstall(env = process.env) {
+  return STRICT_INSTALL_VALUES.has(String(env[STRICT_INSTALL_ENV] ?? '').trim().toLowerCase())
 }
 
-if (require.main === module) void install()
+async function main({ env = process.env, run = install } = {}) {
+  const strict = isStrictInstall(env)
+  try {
+    await run({ strict })
+  } catch (error) {
+    console.error(
+      strict
+        ? `[lingua-rs] install failed and ${STRICT_INSTALL_ENV} is set, so the install is failing: ${errorMessage(error)}`
+        : `[lingua-rs] install failed unexpectedly: ${errorMessage(error)}`,
+    )
+    process.exitCode = 1
+  }
+}
+
+if (require.main === module) void main()
 
 module.exports = {
   download,
   fetchText,
   hashFile,
   install,
+  isStrictInstall,
+  main,
   parseChecksum,
   MAX_REDIRECTS,
 }

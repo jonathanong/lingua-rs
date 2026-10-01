@@ -23,7 +23,8 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "postinstall.js"
+    "postinstall.js",
+    "retry.js"
   ],
   "napi": {
     "binaryName": "lingua_rs",
