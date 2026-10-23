@@ -5,7 +5,7 @@
 // files, redirect loops) fails immediately.
 'use strict'
 
-const DEFAULT_MAX_ATTEMPTS = 4
+const DEFAULT_MAX_ATTEMPTS = 7
 const BASE_DELAY_MS = 1_000
 const JITTER_RATIO = 0.25
 const MAX_DELAY_MS = 30_000
@@ -52,7 +52,8 @@ function parseRetryAfter(value, now) {
 }
 
 // `attempt` is the 1-based number of the attempt that just failed: the delays
-// are roughly 1 s, 2 s and 4 s, each plus up to 25% jitter. Retry-After is
+// are roughly 1 s, 2 s, 4 s, 8 s, 16 s and 30 s (the last capped), each plus
+// up to 25% jitter, about 60 s in total across the default 7 attempts. Retry-After is
 // honored on 429 and 503 and the result never exceeds MAX_DELAY_MS.
 function retryDelayMs(error, attempt, { random = Math.random, now = Date.now } = {}) {
   const exponential = BASE_DELAY_MS * 2 ** (attempt - 1)

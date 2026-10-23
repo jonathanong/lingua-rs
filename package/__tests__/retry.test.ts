@@ -197,10 +197,10 @@ describe('withRetry', () => {
     expect(sleep.mock.calls).toEqual([[1_000], [2_000]])
     expect(warn.mock.calls).toEqual([
       [
-        '[lingua-rs] fetching x: attempt 1 of 4 failed ' +
+        '[lingua-rs] fetching x: attempt 1 of 7 failed ' +
           '(HTTP 500 fetching https://example.test/x); retrying in 1.0s',
       ],
-      ['[lingua-rs] fetching x: attempt 2 of 4 failed (read ECONNRESET); retrying in 2.0s'],
+      ['[lingua-rs] fetching x: attempt 2 of 7 failed (read ECONNRESET); retrying in 2.0s'],
     ])
     expect(warn.mock.calls.every(([line]) => !String(line).includes('\n'))).toBe(true)
   })
@@ -215,15 +215,15 @@ describe('withRetry', () => {
     await withRetry('op', operation, { sleep: async () => undefined, random: noJitter })
 
     expect(warn).toHaveBeenCalledWith(
-      '[lingua-rs] op: attempt 1 of 4 failed (ECONNREFUSED); retrying in 1.0s',
+      '[lingua-rs] op: attempt 1 of 7 failed (ECONNREFUSED); retrying in 1.0s',
     )
   })
 
-  it('makes four attempts by default and rethrows the last error', async () => {
-    expect(DEFAULT_MAX_ATTEMPTS).toBe(4)
+  it('retries a persistent 5xx until the seventh attempt fails', async () => {
+    expect(DEFAULT_MAX_ATTEMPTS).toBe(7)
     const sleep = vi.fn(async () => undefined)
     vi.spyOn(console, 'warn').mockReturnValue(undefined)
-    const failures = [500, 502, 503, 504].map(statusCode => httpError(statusCode))
+    const failures = [500, 502, 503, 504, 500, 502, 504].map(statusCode => httpError(statusCode))
     const operation = vi.fn(async () => {
       throw failures.shift()
     })
@@ -232,8 +232,15 @@ describe('withRetry', () => {
       statusCode: 504,
     })
 
-    expect(operation).toHaveBeenCalledTimes(4)
-    expect(sleep.mock.calls).toEqual([[1_000], [2_000], [4_000]])
+    expect(operation).toHaveBeenCalledTimes(7)
+    expect(sleep.mock.calls).toEqual([
+      [1_000],
+      [2_000],
+      [4_000],
+      [8_000],
+      [16_000],
+      [30_000],
+    ])
   })
 
   it('honors a custom attempt limit', async () => {
