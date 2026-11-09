@@ -60,9 +60,17 @@ jobs:
         working-directory: package
         run: pnpm exec tsc --noEmit
 
-      - name: Run Node tests
+      - name: Run Node tests with 100% coverage
         working-directory: package
-        run: pnpm test
+        run: pnpm coverage
+
+      - name: Upload JavaScript coverage to Codecov
+        uses: codecov/codecov-action@v7
+        with:
+          use_oidc: true
+          files: package/coverage/lcov.info
+          flags: js
+          fail_ci_if_error: true
 
       - name: Run Rust tests
         run: cargo test -p lingua-rs

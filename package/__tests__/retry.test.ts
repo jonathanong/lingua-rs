@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 const {
   CHECKSUM_MISMATCH_CODE,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { detectLanguage, detectLanguageMany } from '../index'
+import { detectLanguage, detectLanguageMany } from '../index.js'
 
 function buf(s: string): Buffer {
   return Buffer.from(s, 'utf-8')
