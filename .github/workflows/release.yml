@@ -27,7 +27,7 @@ env:
 jobs:
   validate:
     name: Validate
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     timeout-minutes: 420
     steps:
       - name: Checkout

@@ -15,7 +15,7 @@ env:
 jobs:
   test:
     name: Test
-    runs-on: ubuntu-slim
+    runs-on: ubuntu-latest
     timeout-minutes: 420
     permissions:
       id-token: write
