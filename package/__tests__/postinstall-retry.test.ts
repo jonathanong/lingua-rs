@@ -267,7 +267,7 @@ describe('install retries', () => {
     })
 
     expect(fetchChecksum).toHaveBeenCalledTimes(3)
-    expect(fetchChecksum).toHaveBeenLastCalledWith(`${releaseUrl}.sha256`, expect.any(Function))
+    expect(fetchChecksum).toHaveBeenLastCalledWith(`${releaseUrl}.sha256`, expect.any(Function), expect.any(AbortSignal))
     expect(sleep.mock.calls).toEqual([[1_000], [2_000]])
     expect(downloadFile).toHaveBeenCalledOnce()
     expect(warn).toHaveBeenCalledWith(
@@ -308,6 +308,7 @@ describe('install retries', () => {
       expect.stringContaining(binaryName),
       expectedChecksum,
       expect.any(Function),
+      expect.any(AbortSignal),
     )
     expect(sleep.mock.calls).toEqual([[1_000], [2_000]])
   })

@@ -5,6 +5,8 @@ const STRICT_INSTALL_ENV = 'LINGUA_RS_STRICT_INSTALL'
 const SKIP_DOWNLOAD_ENV = 'LINGUA_RS_SKIP_DOWNLOAD'
 const DOWNLOAD_TIMEOUT_ENV = 'LINGUA_RS_DOWNLOAD_TIMEOUT_MS'
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 90_000
+// setTimeout coerces anything above this to 1ms.
+const MAX_TIMER_MS = 2_147_483_647
 const OFF_VALUES = new Set(['', '0', 'false'])
 
 const isOn = (env, name) => !OFF_VALUES.has(String(env[name] ?? '').trim().toLowerCase())
@@ -21,7 +23,9 @@ const isSkipDownload = (env = process.env) => isOn(env, SKIP_DOWNLOAD_ENV)
 // retries). Invalid or non-positive overrides fall back to the default.
 function downloadTimeoutMs(env = process.env) {
   const value = Number(String(env[DOWNLOAD_TIMEOUT_ENV] ?? '').trim())
-  return Number.isFinite(value) && value > 0 ? value : DEFAULT_DOWNLOAD_TIMEOUT_MS
+  return Number.isFinite(value) && value > 0
+    ? Math.min(value, MAX_TIMER_MS)
+    : DEFAULT_DOWNLOAD_TIMEOUT_MS
 }
 
 module.exports = {

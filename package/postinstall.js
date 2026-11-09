@@ -84,6 +84,7 @@ function request(
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
     state,
+    signal,
   } = {},
 ) {
   const done = once(cb)
@@ -145,6 +146,17 @@ function request(
     })
   }
 
+  if (signal?.aborted) {
+    done(signal.reason)
+    return
+  }
+  signal?.addEventListener('abort', () => {
+    clearPreResponseTimer()
+    clearBodyTimer()
+    done(signal.reason)
+    destroy(signal.reason)
+  }, { once: true })
+
   const remaining = deadline - Date.now()
   if (remaining <= 0) {
     done(timeoutError('pre-response', url, preResponseTimeoutMs))
@@ -175,6 +187,7 @@ function request(
           preResponseTimeoutMs,
           bodyInactivityTimeoutMs,
           state: { preResponseDeadline: deadline },
+          signal,
         })
         return
       }
@@ -237,6 +250,7 @@ function fetchText(
   {
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
   } = {},
 ) {
   request(url, (requestError, res) => {
@@ -261,7 +275,7 @@ function fetchText(
         done(codedError(`Response closed before completion fetching ${url}`, RESPONSE_CLOSED_CODE))
       }
     })
-  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
+  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
 }
 
 function download(
@@ -273,6 +287,7 @@ function download(
     expectedChecksum,
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
   } = {},
 ) {
   request(url, (requestError, res) => {
@@ -289,6 +304,11 @@ function download(
         return
       }
       const install = () => {
+        if (signal?.aborted) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(signal.reason)
+          return
+        }
         try {
           fs.renameSync(tmp, dest)
         } catch (e) {
@@ -304,6 +324,11 @@ function download(
         return
       }
       hashFile(tmp, (hashError, actualChecksum) => {
+        if (signal?.aborted) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(signal.reason)
+          return
+        }
         if (hashError || actualChecksum !== expectedChecksum) {
           try { fs.unlinkSync(tmp) } catch {}
           cb(
@@ -315,7 +340,7 @@ function download(
         install()
       })
     })
-  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
+  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
 }
 
 function callbackPromise(run) {
@@ -328,10 +353,10 @@ async function install({
   platform = process.platform,
   arch = process.arch,
   directory = __dirname,
-  fetchChecksum = fetchText,
+  fetchChecksum = (url, cb, signal) => fetchText(url, cb, 0, undefined, { signal }),
   hashExistingFile = hashFile,
-  downloadFile = (url, dest, checksum, cb) =>
-    download(url, dest, cb, { expectedChecksum: checksum }),
+  downloadFile = (url, dest, checksum, cb, signal) =>
+    download(url, dest, cb, { expectedChecksum: checksum, signal }),
   strict = false,
   retry = {},
   checksums = loadShippedChecksum,
@@ -360,7 +385,7 @@ async function install({
     try {
       const contents = await withRetry(
         `fetching ${binaryName}.sha256`,
-        () => callbackPromise((cb) => fetchChecksum(`${url}.sha256`, cb)),
+        (signal) => callbackPromise((cb) => fetchChecksum(`${url}.sha256`, cb, signal)),
         budget,
       )
       expectedChecksum = parseChecksum(contents, binaryName)
@@ -386,7 +411,7 @@ async function install({
   try {
     await withRetry(
       `downloading ${binaryName}`,
-      () => callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb)),
+      (signal) => callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb, signal)),
       budget,
     )
   } catch (error) {

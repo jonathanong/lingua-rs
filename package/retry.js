@@ -76,13 +76,20 @@ function budgetError(label, lastError) {
   return error
 }
 
-// Runs the operation but gives up when `remainingMs` elapses.
+// Runs the operation but gives up when `remainingMs` elapses. The operation
+// receives an AbortSignal that is aborted (with the budget error) on expiry so
+// it can cancel its in-flight work.
 function withDeadline(label, operation, remainingMs) {
+  const controller = new AbortController()
   let timer
   const expired = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(budgetError(label)), remainingMs)
+    timer = setTimeout(() => {
+      const error = budgetError(label)
+      reject(error)
+      controller.abort(error)
+    }, remainingMs)
   })
-  return Promise.race([operation(), expired]).finally(() => clearTimeout(timer))
+  return Promise.race([operation(controller.signal), expired]).finally(() => clearTimeout(timer))
 }
 
 // `deadline` is an absolute timestamp (ms) bounding the whole call, including
@@ -96,7 +103,9 @@ async function withRetry(
     const remaining = deadline === undefined ? Infinity : deadline - now()
     if (remaining <= 0) throw budgetError(label)
     try {
-      return await (remaining === Infinity ? operation() : withDeadline(label, operation, remaining))
+      return await (remaining === Infinity
+        ? operation(new AbortController().signal)
+        : withDeadline(label, operation, remaining))
     } catch (error) {
       if (attempt >= maxAttempts || !isRetryable(error)) throw error
       const delayMs = retryDelayMs(error, attempt, { random, now })
