@@ -6,20 +6,13 @@
 // is set (for example to 1), which makes a failed install exit non-zero.
 'use strict'
 
-const https = require('node:https')
-const crypto = require('node:crypto')
-const fs = require('node:fs')
 const path = require('node:path')
-const { pipeline } = require('node:stream')
 
 const { version } = require('./package.json')
-const {
-  CHECKSUM_MISMATCH_CODE,
-  RESPONSE_CLOSED_CODE,
-  errorMessage,
-  withRetry,
-} = require('./retry')
+const { errorMessage, withRetry } = require('./retry')
 const { loadShippedChecksum } = require('./checksums')
+const { MAX_REDIRECTS } = require('./request')
+const { download, fetchText, hashFile, parseChecksum } = require('./transfer')
 const {
   SKIP_DOWNLOAD_ENV,
   STRICT_INSTALL_ENV,
@@ -29,318 +22,12 @@ const {
   isStrictInstall,
 } = require('./install-env')
 
-const MAX_REDIRECTS = 5
-const MAX_CHECKSUM_BYTES = 1024
-const REQUEST_TIMEOUT_MS = 30_000
-const HEX_DIGITS = '0123456789abcdef'
-const ignoreRedirectDrainError = () => undefined
 const BINARY_MAP = {
   'darwin-arm64': 'lingua_rs.darwin-arm64.node',
   'darwin-x64': 'lingua_rs.darwin-x64.node',
   'linux-x64': 'lingua_rs.linux-x64-gnu.node',
   'linux-arm64': 'lingua_rs.linux-arm64-gnu.node',
   'win32-x64': 'lingua_rs.win32-x64-msvc.node',
-}
-
-function once(cb) {
-  let finished = false
-  return (err, value) => {
-    if (finished) return
-    finished = true
-    cb(err, value)
-  }
-}
-
-function timeoutError(phase, url, timeoutMs) {
-  const error = new Error(`lingua-rs timed out after ${timeoutMs}ms waiting for ${phase} from ${url}`)
-  error.code = 'ETIMEDOUT'
-  error.phase = phase
-  error.url = url
-  error.timeoutMs = timeoutMs
-  return error
-}
-
-// Carries the status and Retry-After header so the retry policy can classify
-// the failure without parsing the message.
-function httpError(res, url) {
-  const error = new Error(`HTTP ${res.statusCode} fetching ${url}`)
-  error.statusCode = res.statusCode
-  error.retryAfter = res.headers['retry-after']
-  return error
-}
-
-function codedError(message, code) {
-  const error = new Error(message)
-  error.code = code
-  return error
-}
-
-function request(
-  url,
-  cb,
-  {
-    redirectCount = 0,
-    get = https.get,
-    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
-    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
-    state,
-    signal,
-  } = {},
-) {
-  const done = once(cb)
-  const deadline = state?.preResponseDeadline ?? Date.now() + preResponseTimeoutMs
-  const controller = new AbortController()
-  let requestObject
-  let response
-  let preResponseTimer
-  let bodyTimer
-  let responseDone = false
-  let responseDelivered = false
-
-  const clearPreResponseTimer = () => {
-    if (preResponseTimer) clearTimeout(preResponseTimer)
-    preResponseTimer = undefined
-  }
-  const clearBodyTimer = () => {
-    if (bodyTimer) clearTimeout(bodyTimer)
-    bodyTimer = undefined
-  }
-  const destroy = (error) => {
-    if (response && !response.destroyed) response.destroy(error)
-    if (requestObject && !requestObject.destroyed) requestObject.destroy(error)
-    controller.abort(error)
-  }
-  const timeout = (phase, timeoutMs) => {
-    const error = timeoutError(phase, url, timeoutMs)
-    clearPreResponseTimer()
-    clearBodyTimer()
-    if (phase === 'pre-response' || !responseDelivered) done(error)
-    destroy(error)
-  }
-  const resetBodyTimer = () => {
-    clearBodyTimer()
-    bodyTimer = setTimeout(() => timeout('body', bodyInactivityTimeoutMs), bodyInactivityTimeoutMs)
-    if (bodyTimer.unref) bodyTimer.unref()
-  }
-  const monitorBody = (res) => {
-    response = res
-    responseDone = false
-    resetBodyTimer()
-    res.on('data', resetBodyTimer)
-    res.once('end', () => {
-      responseDone = true
-      clearBodyTimer()
-    })
-    res.once('error', () => {
-      responseDone = true
-      clearBodyTimer()
-    })
-    res.once('aborted', () => {
-      if (responseDone) return
-      responseDone = true
-      clearBodyTimer()
-    })
-    res.once('close', () => {
-      responseDone = true
-      clearBodyTimer()
-    })
-  }
-
-  if (signal?.aborted) {
-    done(signal.reason)
-    return
-  }
-  signal?.addEventListener('abort', () => {
-    clearPreResponseTimer()
-    clearBodyTimer()
-    done(signal.reason)
-    destroy(signal.reason)
-  }, { once: true })
-
-  const remaining = deadline - Date.now()
-  if (remaining <= 0) {
-    done(timeoutError('pre-response', url, preResponseTimeoutMs))
-    return
-  }
-  preResponseTimer = setTimeout(() => timeout('pre-response', preResponseTimeoutMs), remaining)
-  try {
-    requestObject = get(url, { signal: controller.signal }, (res) => {
-      clearPreResponseTimer()
-      response = res
-
-      if (res.statusCode === 301 || res.statusCode === 302) {
-        res.on('error', ignoreRedirectDrainError)
-        res.resume()
-        res.destroy()
-        const location = res.headers.location && new URL(res.headers.location, url).toString()
-        if (!location) {
-          done(new Error(`HTTP ${res.statusCode} missing Location header fetching ${url}`))
-          return
-        }
-        if (redirectCount >= MAX_REDIRECTS) {
-          done(new Error(`Too many redirects fetching ${location}`))
-          return
-        }
-        request(location, done, {
-          redirectCount: redirectCount + 1,
-          get,
-          preResponseTimeoutMs,
-          bodyInactivityTimeoutMs,
-          state: { preResponseDeadline: deadline },
-          signal,
-        })
-        return
-      }
-      if (res.statusCode !== 200) {
-        res.on('error', ignoreRedirectDrainError)
-        res.resume()
-        res.destroy()
-        done(httpError(res, url))
-        return
-      }
-      monitorBody(res)
-      responseDelivered = true
-      done(null, res)
-    }).on('error', (error) => {
-      clearPreResponseTimer()
-      if (!response) done(error)
-    })
-  } catch (error) {
-    clearPreResponseTimer()
-    done(error)
-  }
-}
-
-function hashFile(filename, cb) {
-  const done = once(cb)
-  const hash = crypto.createHash('sha256')
-  const file = fs.createReadStream(filename)
-  let checksum
-  file.on('error', (err) => done(err))
-  file.on('data', (chunk) => hash.update(chunk))
-  file.on('end', () => {
-    checksum = hash.digest('hex')
-  })
-  file.on('close', () => {
-    if (checksum) done(null, checksum)
-  })
-}
-
-function parseChecksum(contents, binaryName) {
-  if (typeof contents !== 'string') {
-    throw new TypeError(`Invalid checksum for ${binaryName}`)
-  }
-  const line = contents.trim()
-  const checksum = line.slice(0, 64).toLowerCase()
-  const separator = line.slice(64, 66)
-  const filename = line.slice(66)
-  const checksumIsHex =
-    checksum.length === 64 && [...checksum].every((character) => HEX_DIGITS.includes(character))
-  if (!checksumIsHex || separator !== '  ' || filename !== binaryName) {
-    throw new Error(`Invalid checksum for ${binaryName}`)
-  }
-  return checksum
-}
-
-function fetchText(
-  url,
-  cb,
-  redirectCount = 0,
-  get = https.get,
-  {
-    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
-    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
-    signal,
-  } = {},
-) {
-  request(url, (requestError, res) => {
-    if (requestError) {
-      cb(requestError)
-      return
-    }
-
-    let contents = ''
-    const done = once(cb)
-    res.setEncoding('utf8')
-    res.on('data', (chunk) => {
-      contents += chunk
-      if (contents.length > MAX_CHECKSUM_BYTES) {
-        res.destroy(new Error(`Checksum response too large fetching ${url}`))
-      }
-    })
-    res.on('error', (err) => done(err))
-    res.on('end', () => done(null, contents))
-    res.on('close', () => {
-      if (!res.readableEnded) {
-        done(codedError(`Response closed before completion fetching ${url}`, RESPONSE_CLOSED_CODE))
-      }
-    })
-  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
-}
-
-function download(
-  url,
-  dest,
-  cb,
-  {
-    get = https.get,
-    expectedChecksum,
-    preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
-    bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
-    signal,
-  } = {},
-) {
-  request(url, (requestError, res) => {
-    if (requestError) {
-      cb(requestError)
-      return
-    }
-    const tmp = dest + '.tmp'
-    const file = fs.createWriteStream(tmp)
-    pipeline(res, file, (err) => {
-      if (err) {
-        try { fs.unlinkSync(tmp) } catch {}
-        cb(err)
-        return
-      }
-      const install = () => {
-        if (signal?.aborted) {
-          try { fs.unlinkSync(tmp) } catch {}
-          cb(signal.reason)
-          return
-        }
-        try {
-          fs.renameSync(tmp, dest)
-        } catch (e) {
-          try { fs.unlinkSync(tmp) } catch {}
-          cb(e)
-          return
-        }
-        cb(null)
-      }
-
-      if (!expectedChecksum) {
-        install()
-        return
-      }
-      hashFile(tmp, (hashError, actualChecksum) => {
-        if (signal?.aborted) {
-          try { fs.unlinkSync(tmp) } catch {}
-          cb(signal.reason)
-          return
-        }
-        if (hashError || actualChecksum !== expectedChecksum) {
-          try { fs.unlinkSync(tmp) } catch {}
-          cb(
-            hashError ||
-              codedError(`Checksum mismatch downloading ${url}`, CHECKSUM_MISMATCH_CODE),
-          )
-          return
-        }
-        install()
-      })
-    })
-  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
 }
 
 function callbackPromise(run) {
@@ -445,6 +132,9 @@ async function main({ env = process.env, run = install } = {}) {
   }
 }
 
+// CLI entry point: only reachable when run as `node postinstall.js`, which the
+// spawnSync tests do in a child process that the coverage tool cannot see.
+/* v8 ignore next */
 if (require.main === module) void main()
 
 module.exports = {

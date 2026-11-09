@@ -92,30 +92,30 @@ function withDeadline(label, operation, remainingMs) {
   return Promise.race([operation(controller.signal), expired]).finally(() => clearTimeout(timer))
 }
 
-// `deadline` is an absolute timestamp (ms) bounding the whole call, including
-// every attempt and backoff. Pass the same value to several calls to share it.
-async function withRetry(
-  label,
-  operation,
-  { maxAttempts = DEFAULT_MAX_ATTEMPTS, sleep = defaultSleep, random, now = Date.now, deadline } = {},
-) {
-  for (let attempt = 1; ; attempt += 1) {
-    const remaining = deadline === undefined ? Infinity : deadline - now()
-    if (remaining <= 0) throw budgetError(label)
-    try {
-      return await (remaining === Infinity
-        ? operation(new AbortController().signal)
-        : withDeadline(label, operation, remaining))
-    } catch (error) {
-      if (attempt >= maxAttempts || !isRetryable(error)) throw error
-      const delayMs = retryDelayMs(error, attempt, { random, now })
-      if (deadline !== undefined && delayMs >= deadline - now()) throw budgetError(label, error)
-      console.warn(
-        `[lingua-rs] ${label}: attempt ${attempt} of ${maxAttempts} failed ` +
-          `(${errorMessage(error)}); retrying in ${(delayMs / 1_000).toFixed(1)}s`,
-      )
-      await sleep(delayMs)
-    }
+function startAttempt(label, operation, deadline, now) {
+  const remaining = deadline === undefined ? Infinity : deadline - now()
+  if (remaining <= 0) {
+    throw budgetError(label)
+  }
+  return remaining === Infinity
+    ? operation(new AbortController().signal)
+    : withDeadline(label, operation, remaining)
+}
+
+// Returns the backoff before the next attempt, or throws when retrying is over.
+function nextDelayMs(label, error, attempt, { maxAttempts, random, now, deadline }) {
+  if (attempt >= maxAttempts || !isRetryable(error)) throw error
+  const delayMs = retryDelayMs(error, attempt, { random, now })
+  if (deadline !== undefined && delayMs >= deadline - now()) throw budgetError(label, error)
+  return delayMs
+}
+
+// Turns a rejection into a value so the retry loop needs no try/catch.
+async function settle(run) {
+  try {
+    return { value: await run() }
+  } catch (error) {
+    return { failed: true, error }
   }
 }
 
@@ -124,6 +124,27 @@ async function withRetry(
 function errorMessage(error) {
   if (!(error instanceof Error)) return String(error)
   return error.message || error.code || error.name
+}
+
+// `deadline` is an absolute timestamp (ms) bounding the whole call, including
+// every attempt and backoff. Pass the same value to several calls to share it.
+async function withRetry(
+  label,
+  operation,
+  { maxAttempts = DEFAULT_MAX_ATTEMPTS, sleep = defaultSleep, random, now = Date.now, deadline } = {},
+) {
+  // The checks live in sync helpers: V8 reports bogus negative branch counts
+  // for conditionals that follow an `await` inside a loop.
+  for (let attempt = 1; ; attempt += 1) {
+    const outcome = await settle(() => startAttempt(label, operation, deadline, now))
+    if (!outcome.failed) return outcome.value
+    const delayMs = nextDelayMs(label, outcome.error, attempt, { maxAttempts, random, now, deadline })
+    console.warn(
+      `[lingua-rs] ${label}: attempt ${attempt} of ${maxAttempts} failed ` +
+        `(${errorMessage(outcome.error)}); retrying in ${(delayMs / 1_000).toFixed(1)}s`,
+    )
+    await sleep(delayMs)
+  }
 }
 
 module.exports = {

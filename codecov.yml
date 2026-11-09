@@ -9,6 +9,13 @@ coverage:
         flags:
           - rust
         if_not_found: failure
+      js:
+        target: 100%
+        threshold: 0%
+        require_base: false
+        flags:
+          - js
+        if_not_found: failure
     patch:
       default: off
       rust:
@@ -16,6 +23,12 @@ coverage:
         threshold: 2%
         flags:
           - rust
+        if_not_found: failure
+      js:
+        target: 100%
+        threshold: 0%
+        flags:
+          - js
         if_not_found: failure
 
 flag_management:
@@ -26,3 +39,11 @@ flag_management:
       paths:
         - crate/src/
         - crate/tests/
+    - name: js
+      paths:
+        - package/checksums.js
+        - package/install-env.js
+        - package/postinstall.js
+        - package/request.js
+        - package/retry.js
+        - package/transfer.js

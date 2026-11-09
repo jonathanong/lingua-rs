@@ -3,6 +3,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, expect, it } from 'vitest'
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
 
 type Callback<T = undefined> = (error: Error | null, value?: T) => void
 type Get = (
