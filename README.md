@@ -15,17 +15,42 @@ npm install lingua-rs
 ### Native binary download
 
 On supported platforms, the install script downloads the matching native binary from the GitHub
-release for the package version. It fetches the release checksum first and installs a downloaded
-binary only after its SHA-256 digest matches; the replacement is atomic, so a failed verification
-does not overwrite an existing binary.
+release for the package version and installs it only after its SHA-256 digest matches; the
+replacement is atomic, so a failed verification does not overwrite an existing binary.
 
-Each checksum and binary fetch is cancelled after 30 seconds without progress.
+#### Offline-friendly install (shipped checksums)
+
+The published npm package contains `checksums.json` (next to `postinstall.js`), a map of
+`{ "<binaryName>": "<sha256>" }` for every supported platform, written by the release workflow before
+`npm publish`. The install script reads the expected digest from it:
+
+- If the binary already on disk (for example restored from a CI cache) matches, the script exits
+  without any network call.
+- Otherwise the binary is downloaded and verified against the shipped digest. No `.sha256` file is
+  fetched at install time.
+- If `checksums.json` is missing or has no valid entry for the platform (a local checkout or a git
+  install), the script falls back to fetching `<binary>.sha256` from the release, as before.
+
+Each binary fetch is cancelled after 30 seconds without progress.
+
+#### Skipping the download
+
+Set `LINGUA_RS_SKIP_DOWNLOAD=1` to make the install script log one line and exit 0 immediately, for
+jobs that never load the addon. It takes precedence over `LINGUA_RS_STRICT_INSTALL`. Unset, empty,
+`0` and `false` leave it off.
+
+#### Download time budget
+
+All network work, including every retry and backoff wait, shares one budget of 90 seconds, so an
+outage cannot stall `npm install` for minutes. Override it with `LINGUA_RS_DOWNLOAD_TIMEOUT_MS`
+(milliseconds; invalid or non-positive values use the default). When the budget runs out the install
+gives up: it exits 0 in the default mode, or fails in strict mode.
 
 #### Retries
 
-Transient failures are retried, for both the checksum fetch and the binary download, up to 4
-attempts in total. The waits between attempts are exponential with jitter: about 1 s, 2 s and 4 s,
-each plus up to 25%. Every retry logs one line with the attempt number, the reason and the delay.
+Transient failures are retried, for both the binary download and the fallback checksum fetch, up to
+7 attempts in total, within the time budget above. The waits between attempts are exponential with
+jitter: about 1 s, 2 s, 4 s, 8 s, 16 s and 30 s, each plus up to 25%. Every retry logs one line with the attempt number, the reason and the delay.
 
 - Retried: HTTP 5xx, 408 and 429; `ECONNRESET`, `ECONNREFUSED`, `ETIMEDOUT`, `EAI_AGAIN`, `EPIPE`
   and "socket hang up"; the 30-second timeouts; a response that closes before it completes; and a
@@ -57,8 +82,8 @@ Strict mode only applies when the install script runs. It does nothing under `--
 or when the package manager does not allow `lingua-rs` to run its install script (for example
 pnpm's build-script allowlist), so also check that the native binding loads after the install.
 
-Release publishing is always strict: after the Linux x64 release asset and checksum have been
-uploaded, the release workflow runs `install({ strict: true })`, loads that downloaded addon,
+Release publishing is always strict: after the release checksums have been written to
+`checksums.json` and the Linux x64 release asset uploaded, the release workflow runs `install({ strict: true })`, loads that downloaded addon,
 verifies deterministic English detection, and removes the downloaded `.node` before publishing the
 npm package.
 

@@ -24,7 +24,10 @@
     "index.js",
     "index.d.ts",
     "postinstall.js",
-    "retry.js"
+    "retry.js",
+    "checksums.js",
+    "install-env.js",
+    "checksums.json"
   ],
   "napi": {
     "binaryName": "lingua_rs",

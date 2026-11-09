@@ -561,7 +561,7 @@ describe('postinstall installation', () => {
         downloadFile,
       })
 
-      expect(fetchChecksum).toHaveBeenCalledWith(`${releaseUrl}.sha256`, expect.any(Function))
+      expect(fetchChecksum).toHaveBeenCalledWith(`${releaseUrl}.sha256`, expect.any(Function), expect.any(AbortSignal))
       expect(downloadFile).not.toHaveBeenCalled()
       expect(log).toHaveBeenCalledWith(`[lingua-rs] ${binaryName} is up to date`)
     } finally {
@@ -593,6 +593,7 @@ describe('postinstall installation', () => {
         destination,
         expectedChecksum,
         expect.any(Function),
+        expect.any(AbortSignal),
       )
       await expect(readFile(destination)).resolves.toEqual(currentArtifact)
     } finally {
@@ -622,6 +623,7 @@ describe('postinstall installation', () => {
         expect.stringMatching(binaryName),
         expectedChecksum,
         expect.any(Function),
+        expect.any(AbortSignal),
       )
     } finally {
       log.mockRestore()

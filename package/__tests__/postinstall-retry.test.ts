@@ -267,7 +267,7 @@ describe('install retries', () => {
     })
 
     expect(fetchChecksum).toHaveBeenCalledTimes(3)
-    expect(fetchChecksum).toHaveBeenLastCalledWith(`${releaseUrl}.sha256`, expect.any(Function))
+    expect(fetchChecksum).toHaveBeenLastCalledWith(`${releaseUrl}.sha256`, expect.any(Function), expect.any(AbortSignal))
     expect(sleep.mock.calls).toEqual([[1_000], [2_000]])
     expect(downloadFile).toHaveBeenCalledOnce()
     expect(warn).toHaveBeenCalledWith(
@@ -308,6 +308,7 @@ describe('install retries', () => {
       expect.stringContaining(binaryName),
       expectedChecksum,
       expect.any(Function),
+      expect.any(AbortSignal),
     )
     expect(sleep.mock.calls).toEqual([[1_000], [2_000]])
   })
@@ -517,7 +518,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: { LINGUA_RS_STRICT_INSTALL: '1' }, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: true })
+      expect(run).toHaveBeenCalledWith({ strict: true, timeoutMs: 90_000 })
       expect(process.exitCode).toBe(1)
       expect(error).toHaveBeenCalledWith(
         '[lingua-rs] install failed and LINGUA_RS_STRICT_INSTALL is set, ' +
@@ -531,7 +532,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: { LINGUA_RS_STRICT_INSTALL: 'true' }, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: true })
+      expect(run).toHaveBeenCalledWith({ strict: true, timeoutMs: 90_000 })
       expect(process.exitCode).toBeUndefined()
     })
 
@@ -543,7 +544,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: {}, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: false })
+      expect(run).toHaveBeenCalledWith({ strict: false, timeoutMs: 90_000 })
       expect(process.exitCode).toBe(1)
       expect(error).toHaveBeenCalledWith('[lingua-rs] install failed unexpectedly: unexpected')
     })

@@ -19,12 +19,19 @@ const {
   errorMessage,
   withRetry,
 } = require('./retry')
+const { loadShippedChecksum } = require('./checksums')
+const {
+  SKIP_DOWNLOAD_ENV,
+  STRICT_INSTALL_ENV,
+  DEFAULT_DOWNLOAD_TIMEOUT_MS,
+  downloadTimeoutMs,
+  isSkipDownload,
+  isStrictInstall,
+} = require('./install-env')
 
 const MAX_REDIRECTS = 5
 const MAX_CHECKSUM_BYTES = 1024
 const REQUEST_TIMEOUT_MS = 30_000
-const STRICT_INSTALL_ENV = 'LINGUA_RS_STRICT_INSTALL'
-const STRICT_INSTALL_OFF_VALUES = new Set(['', '0', 'false'])
 const HEX_DIGITS = '0123456789abcdef'
 const ignoreRedirectDrainError = () => undefined
 const BINARY_MAP = {
@@ -77,6 +84,7 @@ function request(
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
     state,
+    signal,
   } = {},
 ) {
   const done = once(cb)
@@ -138,6 +146,17 @@ function request(
     })
   }
 
+  if (signal?.aborted) {
+    done(signal.reason)
+    return
+  }
+  signal?.addEventListener('abort', () => {
+    clearPreResponseTimer()
+    clearBodyTimer()
+    done(signal.reason)
+    destroy(signal.reason)
+  }, { once: true })
+
   const remaining = deadline - Date.now()
   if (remaining <= 0) {
     done(timeoutError('pre-response', url, preResponseTimeoutMs))
@@ -168,6 +187,7 @@ function request(
           preResponseTimeoutMs,
           bodyInactivityTimeoutMs,
           state: { preResponseDeadline: deadline },
+          signal,
         })
         return
       }
@@ -230,6 +250,7 @@ function fetchText(
   {
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
   } = {},
 ) {
   request(url, (requestError, res) => {
@@ -254,7 +275,7 @@ function fetchText(
         done(codedError(`Response closed before completion fetching ${url}`, RESPONSE_CLOSED_CODE))
       }
     })
-  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
+  }, { redirectCount, get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
 }
 
 function download(
@@ -266,6 +287,7 @@ function download(
     expectedChecksum,
     preResponseTimeoutMs = REQUEST_TIMEOUT_MS,
     bodyInactivityTimeoutMs = REQUEST_TIMEOUT_MS,
+    signal,
   } = {},
 ) {
   request(url, (requestError, res) => {
@@ -282,6 +304,11 @@ function download(
         return
       }
       const install = () => {
+        if (signal?.aborted) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(signal.reason)
+          return
+        }
         try {
           fs.renameSync(tmp, dest)
         } catch (e) {
@@ -297,6 +324,11 @@ function download(
         return
       }
       hashFile(tmp, (hashError, actualChecksum) => {
+        if (signal?.aborted) {
+          try { fs.unlinkSync(tmp) } catch {}
+          cb(signal.reason)
+          return
+        }
         if (hashError || actualChecksum !== expectedChecksum) {
           try { fs.unlinkSync(tmp) } catch {}
           cb(
@@ -308,7 +340,7 @@ function download(
         install()
       })
     })
-  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs })
+  }, { get, preResponseTimeoutMs, bodyInactivityTimeoutMs, signal })
 }
 
 function callbackPromise(run) {
@@ -321,12 +353,14 @@ async function install({
   platform = process.platform,
   arch = process.arch,
   directory = __dirname,
-  fetchChecksum = fetchText,
+  fetchChecksum = (url, cb, signal) => fetchText(url, cb, 0, undefined, { signal }),
   hashExistingFile = hashFile,
-  downloadFile = (url, dest, checksum, cb) =>
-    download(url, dest, cb, { expectedChecksum: checksum }),
+  downloadFile = (url, dest, checksum, cb, signal) =>
+    download(url, dest, cb, { expectedChecksum: checksum, signal }),
   strict = false,
   retry = {},
+  checksums = loadShippedChecksum,
+  timeoutMs = DEFAULT_DOWNLOAD_TIMEOUT_MS,
 } = {}) {
   const platformKey = `${platform}-${arch}`
   const binaryName = BINARY_MAP[platformKey]
@@ -341,22 +375,27 @@ async function install({
 
   const dest = path.join(directory, binaryName)
   const url = `https://github.com/jonathanong/lingua-rs/releases/download/v${version}/${binaryName}`
-  const checksumUrl = `${url}.sha256`
+  // Prefer the checksum shipped in the npm package: no network is needed to
+  // recognise an up-to-date binary. Without checksums.json (local development,
+  // git install) fall back to fetching the release's .sha256 file.
+  let expectedChecksum = checksums(directory, binaryName)
+  const budget = { ...retry, deadline: (retry.now ?? Date.now)() + timeoutMs }
 
-  let expectedChecksum
-  try {
-    const contents = await withRetry(
-      `fetching ${binaryName}.sha256`,
-      () => callbackPromise((cb) => fetchChecksum(checksumUrl, cb)),
-      retry,
-    )
-    expectedChecksum = parseChecksum(contents, binaryName)
-  } catch (error) {
-    console.warn(
-      `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: ${errorMessage(error)}`,
-    )
-    if (strict) throw error
-    return
+  if (!expectedChecksum) {
+    try {
+      const contents = await withRetry(
+        `fetching ${binaryName}.sha256`,
+        (signal) => callbackPromise((cb) => fetchChecksum(`${url}.sha256`, cb, signal)),
+        budget,
+      )
+      expectedChecksum = parseChecksum(contents, binaryName)
+    } catch (error) {
+      console.warn(
+        `[lingua-rs] failed to fetch a valid checksum for ${binaryName}: ${errorMessage(error)}`,
+      )
+      if (strict) throw error
+      return
+    }
   }
 
   let actualChecksum
@@ -372,8 +411,8 @@ async function install({
   try {
     await withRetry(
       `downloading ${binaryName}`,
-      () => callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb)),
-      retry,
+      (signal) => callbackPromise((cb) => downloadFile(url, dest, expectedChecksum, cb, signal)),
+      budget,
     )
   } catch (error) {
     console.warn(
@@ -387,17 +426,15 @@ async function install({
   console.log(`[lingua-rs] installed ${binaryName}`)
 }
 
-// Best-effort by default. Any LINGUA_RS_STRICT_INSTALL value other than unset,
-// empty, 0 or false makes a failed install exit non-zero so the consumer's
-// package install fails. An unexpected value fails closed rather than open.
-function isStrictInstall(env = process.env) {
-  return !STRICT_INSTALL_OFF_VALUES.has(String(env[STRICT_INSTALL_ENV] ?? '').trim().toLowerCase())
-}
-
 async function main({ env = process.env, run = install } = {}) {
+  // Skip wins over strict: nothing is attempted, so nothing can fail.
+  if (isSkipDownload(env)) {
+    console.log(`[lingua-rs] ${SKIP_DOWNLOAD_ENV} is set, skipping native binary install`)
+    return
+  }
   const strict = isStrictInstall(env)
   try {
-    await run({ strict })
+    await run({ strict, timeoutMs: downloadTimeoutMs(env) })
   } catch (error) {
     console.error(
       strict
