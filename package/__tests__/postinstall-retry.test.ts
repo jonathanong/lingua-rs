@@ -517,7 +517,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: { LINGUA_RS_STRICT_INSTALL: '1' }, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: true })
+      expect(run).toHaveBeenCalledWith({ strict: true, timeoutMs: 90_000 })
       expect(process.exitCode).toBe(1)
       expect(error).toHaveBeenCalledWith(
         '[lingua-rs] install failed and LINGUA_RS_STRICT_INSTALL is set, ' +
@@ -531,7 +531,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: { LINGUA_RS_STRICT_INSTALL: 'true' }, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: true })
+      expect(run).toHaveBeenCalledWith({ strict: true, timeoutMs: 90_000 })
       expect(process.exitCode).toBeUndefined()
     })
 
@@ -543,7 +543,7 @@ describe('LINGUA_RS_STRICT_INSTALL', () => {
 
       await main({ env: {}, run })
 
-      expect(run).toHaveBeenCalledWith({ strict: false })
+      expect(run).toHaveBeenCalledWith({ strict: false, timeoutMs: 90_000 })
       expect(process.exitCode).toBe(1)
       expect(error).toHaveBeenCalledWith('[lingua-rs] install failed unexpectedly: unexpected')
     })

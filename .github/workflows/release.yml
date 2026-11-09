@@ -264,6 +264,37 @@ jobs:
         working-directory: package
         run: pnpm install --frozen-lockfile --ignore-scripts
 
+      - name: Write package/checksums.json from release checksums
+        working-directory: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          sums="$(mktemp -d)"
+          gh release download "v${{ needs.prepare.outputs.version }}" \
+            --repo "$GITHUB_REPOSITORY" --pattern '*.node.sha256' --dir "$sums"
+          node - "$sums" <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const dir = process.argv[2]
+          const source = fs.readFileSync('postinstall.js', 'utf8')
+          const map = source.match(/const BINARY_MAP = \{([^}]*)\}/)[1]
+          const binaries = [...map.matchAll(/'(lingua_rs\.[^']+\.node)'/g)].map((m) => m[1])
+          if (binaries.length === 0) throw new Error('No binaries found in BINARY_MAP')
+          const checksums = {}
+          for (const name of binaries) {
+            const line = fs.readFileSync(path.join(dir, `${name}.sha256`), 'utf8').trim()
+            const [hash, file] = line.split(/\s+/)
+            if (!/^[0-9a-f]{64}$/.test(hash) || file !== name) {
+              throw new Error(`Invalid checksum file for ${name}: ${line}`)
+            }
+            checksums[name] = hash
+          }
+          fs.writeFileSync('checksums.json', JSON.stringify(checksums, null, 2) + '\n')
+          NODE
+          cat checksums.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+
       - name: Verify Linux release asset before publishing
         timeout-minutes: 10
         working-directory: package

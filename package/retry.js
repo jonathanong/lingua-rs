@@ -26,6 +26,8 @@ const RETRYABLE_CODES = new Set([
   CHECKSUM_MISMATCH_CODE,
   RESPONSE_CLOSED_CODE,
 ])
+// Raised when the total retry budget runs out. Not retryable.
+const BUDGET_EXHAUSTED_CODE = 'EBUDGET'
 const SOCKET_HANG_UP = /socket hang up/i
 
 function isRetryable(error) {
@@ -67,17 +69,38 @@ function retryDelayMs(error, attempt, { random = Math.random, now = Date.now } =
 // an unref'd timer would let the install script exit successfully mid-retry.
 const defaultSleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+function budgetError(label, lastError) {
+  const detail = lastError ? ` (last error: ${errorMessage(lastError)})` : ''
+  const error = new Error(`${label}: total time budget exhausted${detail}`)
+  error.code = BUDGET_EXHAUSTED_CODE
+  return error
+}
+
+// Runs the operation but gives up when `remainingMs` elapses.
+function withDeadline(label, operation, remainingMs) {
+  let timer
+  const expired = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(budgetError(label)), remainingMs)
+  })
+  return Promise.race([operation(), expired]).finally(() => clearTimeout(timer))
+}
+
+// `deadline` is an absolute timestamp (ms) bounding the whole call, including
+// every attempt and backoff. Pass the same value to several calls to share it.
 async function withRetry(
   label,
   operation,
-  { maxAttempts = DEFAULT_MAX_ATTEMPTS, sleep = defaultSleep, random, now } = {},
+  { maxAttempts = DEFAULT_MAX_ATTEMPTS, sleep = defaultSleep, random, now = Date.now, deadline } = {},
 ) {
   for (let attempt = 1; ; attempt += 1) {
+    const remaining = deadline === undefined ? Infinity : deadline - now()
+    if (remaining <= 0) throw budgetError(label)
     try {
-      return await operation()
+      return await (remaining === Infinity ? operation() : withDeadline(label, operation, remaining))
     } catch (error) {
       if (attempt >= maxAttempts || !isRetryable(error)) throw error
       const delayMs = retryDelayMs(error, attempt, { random, now })
+      if (deadline !== undefined && delayMs >= deadline - now()) throw budgetError(label, error)
       console.warn(
         `[lingua-rs] ${label}: attempt ${attempt} of ${maxAttempts} failed ` +
           `(${errorMessage(error)}); retrying in ${(delayMs / 1_000).toFixed(1)}s`,
@@ -95,6 +118,7 @@ function errorMessage(error) {
 }
 
 module.exports = {
+  BUDGET_EXHAUSTED_CODE,
   CHECKSUM_MISMATCH_CODE,
   DEFAULT_MAX_ATTEMPTS,
   MAX_DELAY_MS,
